@@ -23,3 +23,12 @@ class ThresholdClassifier(BaseEstimator, ClassifierMixin):
         return feature >= self.threshold_
 
 
+class AlwaysTrueClassifier(BaseEstimator, ClassifierMixin):
+    def __init__(self):
+        pass
+
+    def fit(self, X, y):
+        pass
+
+    def predict(self, X):
+        return np.zeros(X.shape[0], dtype=np.bool) + 1

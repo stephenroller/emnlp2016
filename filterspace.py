@@ -8,16 +8,23 @@ def main():
     parser.add_argument('--input', '-i', help='Input space')
     parser.add_argument('--output', '-o', help='Output space')
     parser.add_argument('--whitelist', '-w', help='Whitelist file.')
+    parser.add_argument('--dims', '-d', type=int, help='Number of dimensions')
     args = parser.parse_args()
 
-    whitelist = []
-    with open(args.whitelist) as wlf:
-        for line in wlf:
-            whitelist.append(line.strip().lower())
-    whitelist = set(whitelist)
 
     space = load_mikolov_text(args.input)
-    filtered = space.subset(whitelist)
+
+    if args.whitelist:
+        whitelist = []
+        with open(args.whitelist) as wlf:
+            for line in wlf:
+                whitelist.append(line.strip().lower())
+        whitelist = set(whitelist)
+        filtered = space.subset(whitelist)
+    else:
+        filtered = space
+    if args.dims:
+        filtered.matrix = filtered.matrix[:,:args.dims]
     filtered.save_mikolov_text(args.output)
 
 if __name__ == '__main__':

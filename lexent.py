@@ -1,42 +1,42 @@
 #!/usr/bin/env python
+import os
+import os.path
 import numpy as np
 import pandas as pd
 from collections import defaultdict
 from functools import partial
 
-from sklearn import svm, dummy, metrics
-from sklearn import cross_validation
+from sklearn import svm, linear_model
+from sklearn import cross_validation, metrics
 from scipy.stats import linregress
 
-from space import load_mikolov_text
-from threshold_classifier import ThresholdClassifier
+from threshold_classifier import ThresholdClassifier, AlwaysTrueClassifier
 
-np.random.seed(31337)
+from utdeftvs import load_numpy
 
+
+#SPACES_DIR = "/scratch/cluster/roller/spaces/giga+bnc+uk+wiki2015/output"
+SPACES_DIR = '/scratch/cluster/roller/spaces/giga+bnc+uk+wiki2015/dependency/output/foo'
 SPACES = [
     #'spaces/bow5.words',
     #'spaces/bow2.words',
     #'spaces/deps.words',
-    'spaces/svd.bow5.words',
-    'spaces/svd.bow2.words',
-    'spaces/svd.deps.words',
+    #'spaces/svd.bow5.words',
+    #'spaces/svd.bow2.words',
+    #'spaces/svd.deps.words',
+    #'spaces/window2.vectorspace.ppmi.svd_300.words',
+    #'spaces/sentence.vectorspace.ppmi.svd_300.words',
 ]
-#SPACE_FILENAME = "spaces/bow5.words"
-#SPACE_FILENAME = "spaces/svd.bow2.words"
-#SPACE_FILENAME = "spaces/svd.deps.words"
-
-#DATA_FOLDER = "data/kotlerman2010"
-#DATA_FOLDER = "data/bless2011"
-#DATA_FOLDER = "data/baroni2012"
-#DATA_FOLDER = "data/turney2014"
-#DATA_FOLDER = "data/levy2014"
+SPACES = SPACES + [os.path.join(SPACES_DIR, s) for s in os.listdir(SPACES_DIR) if '.npz' in s]
 
 DATASETS = [
     #"data/kotlerman2010",
     "data/bless2011",
     "data/baroni2012",
     "data/turney2014",
-    #"data/levy2014",
+    "data/levy2014",
+    #"data/eval_hyper",
+    #"data/eval_entail",
 ]
 
 
@@ -45,35 +45,48 @@ N_FOLDS = 20
 def shorten(name):
     return name[name.rindex('/')+1:]
 
+def generate_folds_levy(data, data_name):
+    levy_train = pd.read_table("%s/data_lex_train.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
+    levy_test = pd.read_table("%s/data_lex_test.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
+
+    data_copy = data.copy()
+    data_copy['idx'] = data_copy.index
+
+    train_merge = pd.merge(data_copy, levy_train, on=('word1', 'word2', 'entails'))
+    test_merge = pd.merge(data_copy, levy_test, on=('word1', 'word2', 'entails'))
+
+    return [(np.array(train_merge.idx), np.array(test_merge.idx))]
+
 def generate_folds_all(data, n_folds):
-    # get unique words
-    words = list(set(data.word1).union(set(data.word2)))
-    # randomize the list
-    np.random.shuffle(words)
-    # split into n_folds roughly equal groups
+    all_vocab = list(set(data.word1).union(data.word2))
+    np.random.shuffle(all_vocab)
+
     folds_index = []
     for i in xrange(n_folds):
-        folds_index.append(set(words[i::n_folds]))
+        folds_index.append(set(all_vocab[i::n_folds]))
 
-    # so now we've got 10 folds, based on the lhs. now we need
-    # to make sure that we don't have vocab overlap!
     folds = []
     for i in xrange(n_folds):
         idx = folds_index[i]
-        testmask = data.word1.apply(lambda x: x in idx) | data.word2.apply(lambda x: x in idx)
-        usedwords = set(data[testmask].word1).union(set(data[testmask].word2))
-        trainmask = data.word1.apply(lambda x: x not in usedwords) & data.word2.apply(lambda x: x not in usedwords)
-
-        #wasted = ~(trainmask | testmask)
-        #print "wasted:", np.sum(wasted)/float(len(wasted))
+        testmask = data.word1.apply(lambda x: x in idx) & data.word2.apply(lambda x: x in idx)
+        trainmask = data.word1.apply(lambda x: x not in idx) & data.word2.apply(lambda x: x not in idx)
 
         trainvocab = set(data[trainmask].word1).union(set(data[trainmask].word2))
         testvocab = set(data[testmask].word1).union(set(data[testmask].word2))
-        assert len(trainvocab.intersection(testvocab)) == 0, trainvocab.intersection(testvocab)
+        assert len(trainvocab.intersection(testvocab)) == 0
 
-        folds.append((data.index[trainmask], data.index[testmask]))
+        folds.append((np.array(data.index[trainmask]), np.array(data.index[testmask])))
+
+    #all_seen = set()
+    #for train, test in folds:
+    #    all_seen.update(test)
+    #assert len(all_seen) == len(data)
 
     return folds
+
+
+
+
 
 
 def generate_folds_lhs(data, n_folds):
@@ -109,7 +122,13 @@ def generate_folds_lhs(data, n_folds):
         testvocab = set(data[testmask].word1).union(set(data[testmask].word2))
         assert len(trainvocab.intersection(testvocab)) == 0
 
-        folds.append((data.index[trainmask], data.index[testmask]))
+        folds.append((np.array(data.index[trainmask]), np.array(data.index[testmask])))
+
+    all_seen = set()
+    for train, test in folds:
+        all_seen.update(test)
+
+    assert len(all_seen) == len(data)
 
     return folds
 
@@ -121,6 +140,7 @@ def generate_pseudo_data(data, test_fold, percent_fake=0.5):
     tps = set(zip(tp.word1, tp.word2))
 
     fps = set()
+    fails = 0
     while len(fps) < len(tps) / (2 * percent_fake):
         i = np.random.randint(len(tp1))
         w1 = tp1[i]
@@ -128,6 +148,9 @@ def generate_pseudo_data(data, test_fold, percent_fake=0.5):
         w2 = tp2[j]
 
         if (w1, w2) in tps:
+            fails += 1
+            if fails >= 1000:
+                break
             continue
         else:
             fps.add((w1, w2))
@@ -139,12 +162,8 @@ def generate_pseudo_data(data, test_fold, percent_fake=0.5):
             for w1, w2 in fps]
     )
 
-
-
-
-
 def words2matrix(dataseries, space):
-    return np.array(list(dataseries.apply(lambda x: space[x.lower()])))
+    return np.array(list(dataseries.apply(lambda x: space[x])))
 
 def generate_cosine_matrix(data, space):
     lhs = words2matrix(data.word1, space)
@@ -187,7 +206,7 @@ def generate_rhs_matrix(data, space):
     rhs = words2matrix(data.word2, space)
     return rhs
 
-def generate_feature_matrix(data, space, features):
+def generate_feature_matrix(data, space, features, global_vocab):
     if features == 'cosine':
         X = generate_cosine_matrix(data, space)
     elif features == 'lhs':
@@ -205,20 +224,21 @@ def generate_feature_matrix(data, space, features):
     y = data.entails.as_matrix()
     return X, y
 
-def generate_model():
-    return ThresholdClassifier()
-    #return dummy.DummyClassifier()
-    #return svm.LinearSVC()
-
 def model_factory(name):
     if name == 'linear':
         return svm.LinearSVC()
     elif name == 'poly2':
         return svm.SVC(kernel='poly', degree=2)
+    elif name == 'always':
+        return AlwaysTrueClassifier()
     elif name == 'threshold':
         return ThresholdClassifier()
     elif name == 'rbf':
         return svm.SVC(kernel='rbf')
+    elif name == 'lr2':
+        return linear_model.LogisticRegression(penalty='l2')
+    elif name == 'lr1':
+        return linear_model.LogisticRegression(penalty='l1')
     elif name == 'levy':
         # todo this
         return None
@@ -230,100 +250,176 @@ if __name__ == '__main__':
 
     setups = [
         ('cosine', 'threshold', 'cosine'),
-        #('lhs', 'linear', 'lhs'),
-        #('rhs', 'linear', 'rhs'),
+        ('always', 'always', 'cosine'),
+
+        ('lhs', 'linear', 'lhs'),
+        ('rhs', 'linear', 'rhs'),
         ('concat', 'linear', 'concat'),
         ('diff', 'linear', 'diff'),
+        ('diffsq', 'linear', 'diffsq'),
+
+        #('lhs', 'lr1', 'lhs'),
+        #('rhs', 'lr1', 'rhs'),
+        #('concat', 'lr1', 'concat'),
+        #('diff', 'lr1', 'diff'),
+        #('diffsq', 'lr1', 'diffsq'),
+
+        #('lhs', 'lr2', 'lhs'),
+        #('rhs', 'lr2', 'rhs'),
+        #('concat', 'lr2', 'concat'),
+        #('diff', 'lr2', 'diff'),
+        #('diffsq', 'lr2', 'diffsq'),
+
         #('diffpoly', 'poly2', 'diff'),
         #('diffrbf', 'rbf', 'diff'),
-        ('diffsq', 'linear', 'diffsq'),
     ]
 
 
+    f1_results_csv = []
     me_results_csv = []
 
-    for DATA_FOLDER in DATASETS:
-        data = pd.read_table("%s/data.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
-        DATA_FOLDER_SHORT = shorten(DATA_FOLDER)
-        for SPACE_FILENAME in SPACES:
-            SPACE_FILENAME_SHORT = shorten(SPACE_FILENAME)
-            print "SPACE: %s" % SPACE_FILENAME_SHORT
-            print "DATA: %s" % DATA_FOLDER_SHORT
-            space = load_mikolov_text(SPACE_FILENAME).normalize()
+    global_vocab = None
+    for SPACE_FILENAME in SPACES:
+        space = load_numpy(SPACE_FILENAME)
+        if not global_vocab:
+            global_vocab = set(space.vocab)
+        else:
+            global_vocab = global_vocab.intersection(set(space.vocab))
 
-            # filter for vocabulary
-            mask1 = data.word1.apply(lambda x: x in space)
-            mask2 = data.word2.apply(lambda x: x in space)
+    for seed in xrange(1, 21):
+        #np.random.seed(31337)
+        np.random.seed(seed)
+        for DATA_FOLDER in DATASETS:
+            data = pd.read_table("%s/data.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
+            data['word1'] = data['word1'].apply(lambda x: x.lower() + '/NN')
+            data['word2'] = data['word2'].apply(lambda x: x.lower() + '/NN')
+
+
+            mask1 = data.word1.apply(lambda x: x in global_vocab)
+            mask2 = data.word2.apply(lambda x: x in global_vocab)
+
             data = data[mask1 & mask2].reset_index(drop=True)
+
+
 
             # need our folds for cross validation
             folds = generate_folds_lhs(data, n_folds=N_FOLDS)
+            #folds = generate_folds_levy(data, DATA_FOLDER)
+            DATA_FOLDER_SHORT = shorten(DATA_FOLDER)
 
-            print "Train sizes:", np.array([len(f[0]) for f in folds])
-            print "Test sizes: ", np.array([len(f[1]) for f in folds])
+            for SPACE_FILENAME in SPACES:
+                SPACE_FILENAME_SHORT = shorten(SPACE_FILENAME)
+                print "SPACE: %s" % SPACE_FILENAME_SHORT
+                print "DATA: %s" % DATA_FOLDER_SHORT
+                space = load_numpy(SPACE_FILENAME).normalize()
 
-            print "Standard Classification:"
-            for name, model_name, features in setups:
-                print "Name: %s (model: %s, features: %s)" % (name, model_name, features)
+                train_sizes = np.array([len(f[0]) for f in folds])
+                test_sizes = np.array([len(f[1]) for f in folds])
+                print "training set sizes:", np.mean(train_sizes)
+                print " testing set sizes:", np.mean(test_sizes)
+                print "test as % of train:", np.mean(np.divide(0.0 + test_sizes, train_sizes + test_sizes))
 
-                # generate features
-                X, y = generate_feature_matrix(data, space, features)
-
-                # load up the model
-                model = model_factory(model_name)
-
-                # perform cross validation
-                scores = cross_validation.cross_val_score(model, X, y, scoring='f1', cv=folds)#, n_jobs=-1)
-                #scores = cross_validation.cross_val_score(model, X, y, cv=folds, n_jobs=-1)
-                stderr = np.std(scores)/np.sqrt(N_FOLDS)
-                mean = np.mean(scores)
-
-                #print "F1: %.3f" % mean
-                #print ">=: %.3f" % (mean - stderr)
-                #print "<=: %.3f" % (mean + stderr)
-                print "    F1:  %.3f <=   %.3f  <= %.3f" % (mean - stderr, mean, mean + stderr)
-                # print " ".join("%.3f" % s for s in scores)
-                print
-
-            print "False Positive Issue:"
-            recalls = defaultdict(list)
-            match_errs = defaultdict(list)
-            for fold in folds:
-                fake_data = generate_pseudo_data(data, fold[1], 0.5)
+                print "Standard Classification:"
+                results = []
                 for name, model_name, features in setups:
-                    Xtr, ytr = generate_feature_matrix(data.ix[fold[0]], space, features)
-                    Xte, yte = generate_feature_matrix(fake_data, space, features)
-
+                    # load up the model
                     model = model_factory(model_name)
-                    model.fit(Xtr, ytr)
 
-                    preds = model.predict(Xte)
-                    recalls[name].append(metrics.recall_score(yte, preds))
-                    #match_errs[name].append(metrics.recall_score(~yte, preds))
-                    match_errs[name].append(float(np.sum(~yte & preds)) / np.sum(~yte))
+                    data_with_predictions = data.copy()
+                    data_with_predictions['prediction'] = False
+                    data_with_predictions['fold'] = -1
 
-            print "%-10s   r        m         b      recall   materr" % (" ")
-            for item in recalls.keys():
-                R = np.mean(recalls[item])
-                ME = np.mean(match_errs[item])
-                #for r, me in zip(recalls[item], match_errs[item], trues[item]):
-                #    print "%-10s %.3f   %.3f   %.3f" % (item, r, me, t)
-                m, b, r, p, se = linregress(recalls[item], match_errs[item])
-                print "%-10s  %6.3f   %6.3f    %6.3f  %.3f    %.3f" % (item, r, m, b, R, ME)
+                    # perform cross validation
+                    scores = []
+                    for foldno, (train, test) in enumerate(folds):
+                        # generate features
+                        train_X, train_y = generate_feature_matrix(data.ix[train], space, features, global_vocab)
+                        test_X, test_y = generate_feature_matrix(data.ix[test], space, features, global_vocab)
 
-                for R, ME in zip(recalls[item], match_errs[item]):
-                    me_results_csv.append({
-                        'name': item,
-                        'recall': R,
-                        'match_error': ME,
-                        'space': SPACE_FILENAME_SHORT,
+                        #print train_X.shape, test_X.shape
+
+                        #train_X, train_y = X[train], y[train]
+                        #test_X, test_y = X[test], y[test]
+                        model.fit(train_X, train_y)
+                        preds_y = model.predict(test_X)
+                        data_with_predictions.loc[test,'prediction'] = preds_y
+                        data_with_predictions.loc[test,'fold'] = foldno
+                        scores.append(metrics.f1_score(test_y, preds_y))
+
+                    stderr = np.std(scores)/np.sqrt(N_FOLDS)
+                    mean = np.mean(scores)
+
+                    f1_results_csv.append({
                         'data': DATA_FOLDER_SHORT,
+                        'space': SPACE_FILENAME_SHORT,
+                        'model': model_name,
+                        'features': features,
+                        'dims': space.matrix.shape[1],
+                        'mean': mean,
+                        'std': stderr,
+                        'n_folds': N_FOLDS,
+                        'seed': seed,
                     })
 
+                    # make sure we've seen every item
+                    assert len(data_with_predictions[data_with_predictions['fold'] == -1]) == 0
+
+                    data_with_predictions.to_csv("results/data:%s_space:%s_modelname:%s_features:%s.csv" %
+                        (DATA_FOLDER_SHORT, SPACE_FILENAME_SHORT, model_name, features), index=False)
+
+                    #print "F1: %.3f" % mean
+                    #print ">=: %.3f" % (mean - stderr)
+                    #print "<=: %.3f" % (mean + stderr)
+                    results.append((mean, (model_name, features, mean - stderr, mean, mean + stderr)))
+                results = sorted(results)
+                for val, item in results:
+                    print "    %-10s %-10s   F1:  %.3f <=   %.3f  <= %.3f" % item
+
+                print "False Positive Issue:"
+                recalls = defaultdict(list)
+                match_errs = defaultdict(list)
+                for fold in folds:
+                    fake_data = generate_pseudo_data(data, fold[1], 0.5)
+                    if len(fake_data) == 0:
+                        continue
+                    for name, model_name, features in setups:
+                        Xtr, ytr = generate_feature_matrix(data.ix[fold[0]], space, features, global_vocab)
+                        Xte, yte = generate_feature_matrix(fake_data, space, features, global_vocab)
+
+                        model = model_factory(model_name)
+                        model.fit(Xtr, ytr)
+
+                        preds = model.predict(Xte)
+                        recalls[(name, model_name, features)].append(metrics.recall_score(yte, preds))
+                        #match_errs[name].append(metrics.recall_score(~yte, preds))
+                        match_errs[(name, model_name, features)].append(float(np.sum(~yte & preds)) / np.sum(~yte))
+
+                print "%-10s  %-10s   r        m         b      recall   materr" % (" ", " ")
+                for item in recalls.keys():
+                    name, model_name, features = item
+
+                    R = np.mean(recalls[item])
+                    ME = np.mean(match_errs[item])
+                    #for r, me in zip(recalls[item], match_errs[item], trues[item]):
+                    #    print "%-10s %.3f   %.3f   %.3f" % (item, r, me, t)
+                    m, b, r, p, se = linregress(recalls[item], match_errs[item])
+                    print "%-10s  %-10s  %6.3f   %6.3f    %6.3f  %.3f    %.3f" % (model_name, features, r, m, b, R, ME)
+
+                    for R, ME in zip(recalls[item], match_errs[item]):
+                        me_results_csv.append({
+                            'name': name,
+                            'model': model_name,
+                            'features': features,
+                            'Features + Data': features + " " + DATA_FOLDER_SHORT,
+                            'recall': R,
+                            'match_error': ME,
+                            'space': SPACE_FILENAME_SHORT,
+                            'data': DATA_FOLDER_SHORT,
+                            'seed': seed,
+                        })
+                print
+            print
+
     pd.DataFrame(me_results_csv).to_csv("matcherror.csv", index=False)
-
-
-
-
-
+    pd.DataFrame(f1_results_csv).to_csv("allresults.csv", index=False)
 
