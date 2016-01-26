@@ -10,13 +10,13 @@ from sklearn import svm, linear_model
 from sklearn import cross_validation, metrics
 from scipy.stats import linregress
 
-from threshold_classifier import ThresholdClassifier, AlwaysTrueClassifier
+from custom_classifiers import ThresholdClassifier
 
 from utdeftvs import load_numpy
 
 
-#SPACES_DIR = "/scratch/cluster/roller/spaces/giga+bnc+uk+wiki2015/output"
-SPACES_DIR = '/scratch/cluster/roller/spaces/giga+bnc+uk+wiki2015/dependency/output/foo'
+SPACES_DIR = "/scratch/cluster/roller/spaces/giga+bnc+uk+wiki2015/output"
+#SPACES_DIR = '/scratch/cluster/roller/spaces/giga+bnc+uk+wiki2015/dependency/output/foo'
 SPACES = [
     #'spaces/bow5.words',
     #'spaces/bow2.words',
@@ -27,7 +27,8 @@ SPACES = [
     #'spaces/window2.vectorspace.ppmi.svd_300.words',
     #'spaces/sentence.vectorspace.ppmi.svd_300.words',
 ]
-SPACES = SPACES + [os.path.join(SPACES_DIR, s) for s in os.listdir(SPACES_DIR) if '.npz' in s]
+SPACES = SPACES + [s for s in os.listdir(SPACES_DIR) if ('.npz' in s) and ('.svd300' in s)]
+print SPACES
 
 DATASETS = [
     #"data/kotlerman2010",
@@ -229,8 +230,6 @@ def model_factory(name):
         return svm.LinearSVC()
     elif name == 'poly2':
         return svm.SVC(kernel='poly', degree=2)
-    elif name == 'always':
-        return AlwaysTrueClassifier()
     elif name == 'threshold':
         return ThresholdClassifier()
     elif name == 'rbf':
@@ -250,7 +249,6 @@ if __name__ == '__main__':
 
     setups = [
         ('cosine', 'threshold', 'cosine'),
-        ('always', 'always', 'cosine'),
 
         ('lhs', 'linear', 'lhs'),
         ('rhs', 'linear', 'rhs'),
@@ -280,7 +278,7 @@ if __name__ == '__main__':
 
     global_vocab = None
     for SPACE_FILENAME in SPACES:
-        space = load_numpy(SPACE_FILENAME)
+        space = load_numpy(os.path.join(SPACES_DIR, SPACE_FILENAME))
         if not global_vocab:
             global_vocab = set(space.vocab)
         else:
@@ -308,10 +306,10 @@ if __name__ == '__main__':
             DATA_FOLDER_SHORT = shorten(DATA_FOLDER)
 
             for SPACE_FILENAME in SPACES:
-                SPACE_FILENAME_SHORT = shorten(SPACE_FILENAME)
+                SPACE_FILENAME_SHORT = SPACE_FILENAME
                 print "SPACE: %s" % SPACE_FILENAME_SHORT
                 print "DATA: %s" % DATA_FOLDER_SHORT
-                space = load_numpy(SPACE_FILENAME).normalize()
+                space = load_numpy(os.path.join(SPACES_DIR, SPACE_FILENAME)).normalize()
 
                 train_sizes = np.array([len(f[0]) for f in folds])
                 test_sizes = np.array([len(f[1]) for f in folds])
@@ -375,51 +373,51 @@ if __name__ == '__main__':
                 for val, item in results:
                     print "    %-10s %-10s   F1:  %.3f <=   %.3f  <= %.3f" % item
 
-                print "False Positive Issue:"
-                recalls = defaultdict(list)
-                match_errs = defaultdict(list)
-                for fold in folds:
-                    fake_data = generate_pseudo_data(data, fold[1], 0.5)
-                    if len(fake_data) == 0:
-                        continue
-                    for name, model_name, features in setups:
-                        Xtr, ytr = generate_feature_matrix(data.ix[fold[0]], space, features, global_vocab)
-                        Xte, yte = generate_feature_matrix(fake_data, space, features, global_vocab)
+                #print "False Positive Issue:"
+                #recalls = defaultdict(list)
+                #match_errs = defaultdict(list)
+                #for fold in folds:
+                #    fake_data = generate_pseudo_data(data, fold[1], 0.5)
+                #    if len(fake_data) == 0:
+                #        continue
+                #    for name, model_name, features in setups:
+                #        Xtr, ytr = generate_feature_matrix(data.ix[fold[0]], space, features, global_vocab)
+                #        Xte, yte = generate_feature_matrix(fake_data, space, features, global_vocab)
 
-                        model = model_factory(model_name)
-                        model.fit(Xtr, ytr)
+                #        model = model_factory(model_name)
+                #        model.fit(Xtr, ytr)
 
-                        preds = model.predict(Xte)
-                        recalls[(name, model_name, features)].append(metrics.recall_score(yte, preds))
-                        #match_errs[name].append(metrics.recall_score(~yte, preds))
-                        match_errs[(name, model_name, features)].append(float(np.sum(~yte & preds)) / np.sum(~yte))
+                #        preds = model.predict(Xte)
+                #        recalls[(name, model_name, features)].append(metrics.recall_score(yte, preds))
+                #        #match_errs[name].append(metrics.recall_score(~yte, preds))
+                #        match_errs[(name, model_name, features)].append(float(np.sum(~yte & preds)) / np.sum(~yte))
 
-                print "%-10s  %-10s   r        m         b      recall   materr" % (" ", " ")
-                for item in recalls.keys():
-                    name, model_name, features = item
+                #print "%-10s  %-10s   r        m         b      recall   materr" % (" ", " ")
+                #for item in recalls.keys():
+                #    name, model_name, features = item
 
-                    R = np.mean(recalls[item])
-                    ME = np.mean(match_errs[item])
-                    #for r, me in zip(recalls[item], match_errs[item], trues[item]):
-                    #    print "%-10s %.3f   %.3f   %.3f" % (item, r, me, t)
-                    m, b, r, p, se = linregress(recalls[item], match_errs[item])
-                    print "%-10s  %-10s  %6.3f   %6.3f    %6.3f  %.3f    %.3f" % (model_name, features, r, m, b, R, ME)
+                #    R = np.mean(recalls[item])
+                #    ME = np.mean(match_errs[item])
+                #    #for r, me in zip(recalls[item], match_errs[item], trues[item]):
+                #    #    print "%-10s %.3f   %.3f   %.3f" % (item, r, me, t)
+                #    m, b, r, p, se = linregress(recalls[item], match_errs[item])
+                #    print "%-10s  %-10s  %6.3f   %6.3f    %6.3f  %.3f    %.3f" % (model_name, features, r, m, b, R, ME)
 
-                    for R, ME in zip(recalls[item], match_errs[item]):
-                        me_results_csv.append({
-                            'name': name,
-                            'model': model_name,
-                            'features': features,
-                            'Features + Data': features + " " + DATA_FOLDER_SHORT,
-                            'recall': R,
-                            'match_error': ME,
-                            'space': SPACE_FILENAME_SHORT,
-                            'data': DATA_FOLDER_SHORT,
-                            'seed': seed,
-                        })
+                #    for R, ME in zip(recalls[item], match_errs[item]):
+                #        me_results_csv.append({
+                #            'name': name,
+                #            'model': model_name,
+                #            'features': features,
+                #            'Features + Data': features + " " + DATA_FOLDER_SHORT,
+                #            'recall': R,
+                #            'match_error': ME,
+                #            'space': SPACE_FILENAME_SHORT,
+                #            'data': DATA_FOLDER_SHORT,
+                #            'seed': seed,
+                #        })
                 print
             print
 
-    pd.DataFrame(me_results_csv).to_csv("matcherror.csv", index=False)
-    pd.DataFrame(f1_results_csv).to_csv("allresults.csv", index=False)
+    #pd.DataFrame(me_results_csv).to_csv("matcherror.csv", index=False)
+    #pd.DataFrame(f1_results_csv).to_csv("allresults.csv", index=False)
 
