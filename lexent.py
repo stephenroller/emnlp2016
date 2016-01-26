@@ -3,6 +3,7 @@ import os
 import os.path
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from collections import defaultdict
 from functools import partial
 
@@ -27,8 +28,8 @@ SPACES = [
     #'spaces/window2.vectorspace.ppmi.svd_300.words',
     #'spaces/sentence.vectorspace.ppmi.svd_300.words',
 ]
-SPACES = SPACES + [s for s in os.listdir(SPACES_DIR) if ('.npz' in s) and ('.svd300' in s)]
-print SPACES
+#SPACES = SPACES + [s for s in os.listdir(SPACES_DIR) if ('.npz' in s) and ('.svd300' in s)]
+SPACES = ['dependency.svd300.ppmi.250k.1m.npz', 'window2.svd300.ppmi.top250k.top20k.npz']
 
 DATASETS = [
     #"data/kotlerman2010",
@@ -90,11 +91,11 @@ def generate_folds_all(data, n_folds):
 
 
 
-def generate_folds_lhs(data, n_folds):
+def generate_folds_lhs(rng, data, n_folds):
     # get unique words
     lhwords = list(set(data.word1))
     # randomize the list
-    np.random.shuffle(lhwords)
+    rng.shuffle(lhwords)
     # split into n_folds roughly equal groups
     folds_index = []
     for i in xrange(n_folds):
@@ -133,35 +134,35 @@ def generate_folds_lhs(data, n_folds):
 
     return folds
 
-def generate_pseudo_data(data, test_fold, percent_fake=0.5):
-    t = data.ix[test_fold]
-    tp = t[t.entails == True]
-    tp1 = list(set(tp.word1))
-    tp2 = list(set(tp.word2))
-    tps = set(zip(tp.word1, tp.word2))
-
-    fps = set()
-    fails = 0
-    while len(fps) < len(tps) / (2 * percent_fake):
-        i = np.random.randint(len(tp1))
-        w1 = tp1[i]
-        j = np.random.randint(len(tp2))
-        w2 = tp2[j]
-
-        if (w1, w2) in tps:
-            fails += 1
-            if fails >= 1000:
-                break
-            continue
-        else:
-            fps.add((w1, w2))
-
-    return pd.DataFrame(
-        [{'word1': w1, 'word2': w2, 'entails': True}
-            for w1, w2 in tps] +
-        [{'word1': w1, 'word2': w2, 'entails': False}
-            for w1, w2 in fps]
-    )
+#def generate_pseudo_data(data, test_fold, percent_fake=0.5):
+#    t = data.ix[test_fold]
+#    tp = t[t.entails == True]
+#    tp1 = list(set(tp.word1))
+#    tp2 = list(set(tp.word2))
+#    tps = set(zip(tp.word1, tp.word2))
+#
+#    fps = set()
+#    fails = 0
+#    while len(fps) < len(tps) / (2 * percent_fake):
+#        i = np.random.randint(len(tp1))
+#        w1 = tp1[i]
+#        j = np.random.randint(len(tp2))
+#        w2 = tp2[j]
+#
+#        if (w1, w2) in tps:
+#            fails += 1
+#            if fails >= 1000:
+#                break
+#            continue
+#        else:
+#            fps.add((w1, w2))
+#
+#    return pd.DataFrame(
+#        [{'word1': w1, 'word2': w2, 'entails': True}
+#            for w1, w2 in tps] +
+#        [{'word1': w1, 'word2': w2, 'entails': False}
+#            for w1, w2 in fps]
+#    )
 
 def words2matrix(dataseries, space):
     return np.array(list(dataseries.apply(lambda x: space[x])))
@@ -244,14 +245,147 @@ def model_factory(name):
     else:
         raise ValueError("Don't know about %s models." % name)
 
+def perform_trial(seed, setups, global_vocab):
+    output = []
+    rng = np.random.RandomState(seed)
+    for DATA_FOLDER in DATASETS:
+        data = pd.read_table("%s/data.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
+        data['word1'] = data['word1'].apply(lambda x: x.lower() + '/NN')
+        data['word2'] = data['word2'].apply(lambda x: x.lower() + '/NN')
+
+
+        mask1 = data.word1.apply(lambda x: x in global_vocab)
+        mask2 = data.word2.apply(lambda x: x in global_vocab)
+
+        data = data[mask1 & mask2].reset_index(drop=True)
+
+        # need our folds for cross validation
+        folds = generate_folds_lhs(rng, data, n_folds=N_FOLDS)
+        #folds = generate_folds_levy(data, DATA_FOLDER)
+        DATA_FOLDER_SHORT = shorten(DATA_FOLDER)
+
+        for SPACE_FILENAME in SPACES:
+            SPACE_FILENAME_SHORT = SPACE_FILENAME
+            output += ["SPACE: %s" % SPACE_FILENAME_SHORT]
+            output += ["DATA: %s" % DATA_FOLDER_SHORT]
+            space = load_numpy(os.path.join(SPACES_DIR, SPACE_FILENAME)).normalize()
+
+            train_sizes = np.array([len(f[0]) for f in folds])
+            test_sizes = np.array([len(f[1]) for f in folds])
+            output += ["training set sizes: %f" % np.mean(train_sizes)]
+            output += [" testing set sizes: %f" % np.mean(test_sizes)]
+            output += ["test as %% of train: %f" % np.mean(np.divide(0.0 + test_sizes, train_sizes + test_sizes))]
+
+            output += ["Standard Classification:"]
+            results = []
+            for name, model_name, features in setups:
+                # load up the model
+                model = model_factory(model_name)
+
+                data_with_predictions = data.copy()
+                data_with_predictions['prediction'] = False
+                data_with_predictions['fold'] = -1
+
+                # perform cross validation
+                scores = []
+                for foldno, (train, test) in enumerate(folds):
+                    # generate features
+                    train_X, train_y = generate_feature_matrix(data.ix[train], space, features, global_vocab)
+                    test_X, test_y = generate_feature_matrix(data.ix[test], space, features, global_vocab)
+
+                    #print train_X.shape, test_X.shape
+
+                    #train_X, train_y = X[train], y[train]
+                    #test_X, test_y = X[test], y[test]
+                    model.fit(train_X, train_y)
+                    preds_y = model.predict(test_X)
+                    data_with_predictions.loc[test,'prediction'] = preds_y
+                    data_with_predictions.loc[test,'fold'] = foldno
+                    scores.append(metrics.f1_score(test_y, preds_y))
+
+                stderr = np.std(scores)/np.sqrt(N_FOLDS)
+                mean = np.mean(scores)
+
+                #f1_results_csv.append({
+                #    'data': DATA_FOLDER_SHORT,
+                #    'space': SPACE_FILENAME_SHORT,
+                #    'model': model_name,
+                #    'features': features,
+                #    'dims': space.matrix.shape[1],
+                #    'mean': mean,
+                #    'std': stderr,
+                #    'n_folds': N_FOLDS,
+                #    'seed': seed,
+                #})
+
+                # make sure we've seen every item
+                assert len(data_with_predictions[data_with_predictions['fold'] == -1]) == 0
+
+                #data_with_predictions.to_csv("results/data:%s_space:%s_modelname:%s_features:%s.csv" %
+                #    (DATA_FOLDER_SHORT, SPACE_FILENAME_SHORT, model_name, features), index=False)
+
+                #print "F1: %.3f" % mean
+                #print ">=: %.3f" % (mean - stderr)
+                #print "<=: %.3f" % (mean + stderr)
+                results.append((mean, (model_name, features, mean - stderr, mean, mean + stderr)))
+            results = sorted(results)
+            for val, item in results:
+                output += ["    %-10s %-10s   F1:  %.3f <=   %.3f  <= %.3f" % item]
+
+            #print "False Positive Issue:"
+            #recalls = defaultdict(list)
+            #match_errs = defaultdict(list)
+            #for fold in folds:
+            #    fake_data = generate_pseudo_data(data, fold[1], 0.5)
+            #    if len(fake_data) == 0:
+            #        continue
+            #    for name, model_name, features in setups:
+            #        Xtr, ytr = generate_feature_matrix(data.ix[fold[0]], space, features, global_vocab)
+            #        Xte, yte = generate_feature_matrix(fake_data, space, features, global_vocab)
+
+            #        model = model_factory(model_name)
+            #        model.fit(Xtr, ytr)
+
+            #        preds = model.predict(Xte)
+            #        recalls[(name, model_name, features)].append(metrics.recall_score(yte, preds))
+            #        #match_errs[name].append(metrics.recall_score(~yte, preds))
+            #        match_errs[(name, model_name, features)].append(float(np.sum(~yte & preds)) / np.sum(~yte))
+
+            #print "%-10s  %-10s   r        m         b      recall   materr" % (" ", " ")
+            #for item in recalls.keys():
+            #    name, model_name, features = item
+
+            #    R = np.mean(recalls[item])
+            #    ME = np.mean(match_errs[item])
+            #    #for r, me in zip(recalls[item], match_errs[item], trues[item]):
+            #    #    print "%-10s %.3f   %.3f   %.3f" % (item, r, me, t)
+            #    m, b, r, p, se = linregress(recalls[item], match_errs[item])
+            #    print "%-10s  %-10s  %6.3f   %6.3f    %6.3f  %.3f    %.3f" % (model_name, features, r, m, b, R, ME)
+
+            #    for R, ME in zip(recalls[item], match_errs[item]):
+            #        me_results_csv.append({
+            #            'name': name,
+            #            'model': model_name,
+            #            'features': features,
+            #            'Features + Data': features + " " + DATA_FOLDER_SHORT,
+            #            'recall': R,
+            #            'match_error': ME,
+            #            'space': SPACE_FILENAME_SHORT,
+            #            'data': DATA_FOLDER_SHORT,
+            #            'seed': seed,
+            #        })
+    return output
+
+
+
 
 if __name__ == '__main__':
 
     setups = [
         ('cosine', 'threshold', 'cosine'),
 
-        ('lhs', 'linear', 'lhs'),
-        ('rhs', 'linear', 'rhs'),
+        #('lhs', 'linear', 'lhs'),
+        #('rhs', 'linear', 'rhs'),
         ('concat', 'linear', 'concat'),
         ('diff', 'linear', 'diff'),
         ('diffsq', 'linear', 'diffsq'),
@@ -269,7 +403,8 @@ if __name__ == '__main__':
         #('diffsq', 'lr2', 'diffsq'),
 
         #('diffpoly', 'poly2', 'diff'),
-        #('diffrbf', 'rbf', 'diff'),
+        ('diffrbf', 'rbf', 'diff'),
+        ('concatrbf', 'rbf', 'concat'),
     ]
 
 
@@ -284,139 +419,12 @@ if __name__ == '__main__':
         else:
             global_vocab = global_vocab.intersection(set(space.vocab))
 
-    for seed in xrange(1, 21):
-        #np.random.seed(31337)
-        np.random.seed(seed)
-        for DATA_FOLDER in DATASETS:
-            data = pd.read_table("%s/data.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
-            data['word1'] = data['word1'].apply(lambda x: x.lower() + '/NN')
-            data['word2'] = data['word2'].apply(lambda x: x.lower() + '/NN')
+        results = Parallel(n_jobs=20)(
+            delayed(perform_trial)(seed, setups, global_vocab)
+            for seed in xrange(1, 21))
 
-
-            mask1 = data.word1.apply(lambda x: x in global_vocab)
-            mask2 = data.word2.apply(lambda x: x in global_vocab)
-
-            data = data[mask1 & mask2].reset_index(drop=True)
-
-
-
-            # need our folds for cross validation
-            folds = generate_folds_lhs(data, n_folds=N_FOLDS)
-            #folds = generate_folds_levy(data, DATA_FOLDER)
-            DATA_FOLDER_SHORT = shorten(DATA_FOLDER)
-
-            for SPACE_FILENAME in SPACES:
-                SPACE_FILENAME_SHORT = SPACE_FILENAME
-                print "SPACE: %s" % SPACE_FILENAME_SHORT
-                print "DATA: %s" % DATA_FOLDER_SHORT
-                space = load_numpy(os.path.join(SPACES_DIR, SPACE_FILENAME)).normalize()
-
-                train_sizes = np.array([len(f[0]) for f in folds])
-                test_sizes = np.array([len(f[1]) for f in folds])
-                print "training set sizes:", np.mean(train_sizes)
-                print " testing set sizes:", np.mean(test_sizes)
-                print "test as % of train:", np.mean(np.divide(0.0 + test_sizes, train_sizes + test_sizes))
-
-                print "Standard Classification:"
-                results = []
-                for name, model_name, features in setups:
-                    # load up the model
-                    model = model_factory(model_name)
-
-                    data_with_predictions = data.copy()
-                    data_with_predictions['prediction'] = False
-                    data_with_predictions['fold'] = -1
-
-                    # perform cross validation
-                    scores = []
-                    for foldno, (train, test) in enumerate(folds):
-                        # generate features
-                        train_X, train_y = generate_feature_matrix(data.ix[train], space, features, global_vocab)
-                        test_X, test_y = generate_feature_matrix(data.ix[test], space, features, global_vocab)
-
-                        #print train_X.shape, test_X.shape
-
-                        #train_X, train_y = X[train], y[train]
-                        #test_X, test_y = X[test], y[test]
-                        model.fit(train_X, train_y)
-                        preds_y = model.predict(test_X)
-                        data_with_predictions.loc[test,'prediction'] = preds_y
-                        data_with_predictions.loc[test,'fold'] = foldno
-                        scores.append(metrics.f1_score(test_y, preds_y))
-
-                    stderr = np.std(scores)/np.sqrt(N_FOLDS)
-                    mean = np.mean(scores)
-
-                    f1_results_csv.append({
-                        'data': DATA_FOLDER_SHORT,
-                        'space': SPACE_FILENAME_SHORT,
-                        'model': model_name,
-                        'features': features,
-                        'dims': space.matrix.shape[1],
-                        'mean': mean,
-                        'std': stderr,
-                        'n_folds': N_FOLDS,
-                        'seed': seed,
-                    })
-
-                    # make sure we've seen every item
-                    assert len(data_with_predictions[data_with_predictions['fold'] == -1]) == 0
-
-                    data_with_predictions.to_csv("results/data:%s_space:%s_modelname:%s_features:%s.csv" %
-                        (DATA_FOLDER_SHORT, SPACE_FILENAME_SHORT, model_name, features), index=False)
-
-                    #print "F1: %.3f" % mean
-                    #print ">=: %.3f" % (mean - stderr)
-                    #print "<=: %.3f" % (mean + stderr)
-                    results.append((mean, (model_name, features, mean - stderr, mean, mean + stderr)))
-                results = sorted(results)
-                for val, item in results:
-                    print "    %-10s %-10s   F1:  %.3f <=   %.3f  <= %.3f" % item
-
-                #print "False Positive Issue:"
-                #recalls = defaultdict(list)
-                #match_errs = defaultdict(list)
-                #for fold in folds:
-                #    fake_data = generate_pseudo_data(data, fold[1], 0.5)
-                #    if len(fake_data) == 0:
-                #        continue
-                #    for name, model_name, features in setups:
-                #        Xtr, ytr = generate_feature_matrix(data.ix[fold[0]], space, features, global_vocab)
-                #        Xte, yte = generate_feature_matrix(fake_data, space, features, global_vocab)
-
-                #        model = model_factory(model_name)
-                #        model.fit(Xtr, ytr)
-
-                #        preds = model.predict(Xte)
-                #        recalls[(name, model_name, features)].append(metrics.recall_score(yte, preds))
-                #        #match_errs[name].append(metrics.recall_score(~yte, preds))
-                #        match_errs[(name, model_name, features)].append(float(np.sum(~yte & preds)) / np.sum(~yte))
-
-                #print "%-10s  %-10s   r        m         b      recall   materr" % (" ", " ")
-                #for item in recalls.keys():
-                #    name, model_name, features = item
-
-                #    R = np.mean(recalls[item])
-                #    ME = np.mean(match_errs[item])
-                #    #for r, me in zip(recalls[item], match_errs[item], trues[item]):
-                #    #    print "%-10s %.3f   %.3f   %.3f" % (item, r, me, t)
-                #    m, b, r, p, se = linregress(recalls[item], match_errs[item])
-                #    print "%-10s  %-10s  %6.3f   %6.3f    %6.3f  %.3f    %.3f" % (model_name, features, r, m, b, R, ME)
-
-                #    for R, ME in zip(recalls[item], match_errs[item]):
-                #        me_results_csv.append({
-                #            'name': name,
-                #            'model': model_name,
-                #            'features': features,
-                #            'Features + Data': features + " " + DATA_FOLDER_SHORT,
-                #            'recall': R,
-                #            'match_error': ME,
-                #            'space': SPACE_FILENAME_SHORT,
-                #            'data': DATA_FOLDER_SHORT,
-                #            'seed': seed,
-                #        })
-                print
-            print
+        for r in results:
+            print "\n".join(r)
 
     #pd.DataFrame(me_results_csv).to_csv("matcherror.csv", index=False)
     #pd.DataFrame(f1_results_csv).to_csv("allresults.csv", index=False)

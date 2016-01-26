@@ -44,6 +44,7 @@ def parse_items(lines):
 
 def main():
     parser = argparse.ArgumentParser('Collects results neatly')
+    parser.add_argument('--input', '-i', default='results.log')
     parser.add_argument('--space', '-s')
     parser.add_argument('--model', '-m')
     parser.add_argument('--data', '-d')
@@ -61,7 +62,7 @@ def main():
     # first we want to just filter noise
     skipping = False
     keepers = []
-    with open('results.log') as results:
+    with open(args.input) as results:
         for line in results:
             line = line.strip()
             if not line: continue
