@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 
 import numpy as np
-from sklearn import svm, linear_model
+from sklearn import svm, linear_model, dummy
 
 from custom_classifiers import ThresholdClassifier
 
 SETUPS = {
+    # baseline most common
+    'baseline': ('baseline', 'cosine'),
     # baseline "unsupervised"
     'cosine': ('threshold', 'cosine'),
 
@@ -113,6 +115,8 @@ def classifier_factory(name):
         return linear_model.LogisticRegression(penalty='l2')
     elif name == 'lr1':
         return linear_model.LogisticRegression(penalty='l1')
+    elif name == 'baseline':
+        return dummy.DummyClassifier(strategy='most_frequent')
     elif name == 'levy':
         # todo this
         return None

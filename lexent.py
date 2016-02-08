@@ -30,16 +30,13 @@ def main():
     parser = argparse.ArgumentParser('Lexical Entailment Classifier')
     parser.add_argument('--data', '-d', help='Input file')
     parser.add_argument('--space', '-s', help='Distributional space')
-    parser.add_argument('--seed', '-S', default=1, type=int, help='Random seed')
     parser.add_argument('--model', '-m', help='Model setup', choices=models.SETUPS.keys())
-    parser.add_argument('--experiment', '-e', default='standard', choices=('standard', 'match_error'))
+    parser.add_argument('--experiment', '-e', default='standard', choices=('standard', 'artificial', 'match_error'))
     parser.add_argument('--output', '-o', default='results')
     args = parser.parse_args()
 
     logger.debug('Lexent Arguments: ')
     logger.debug(args)
-
-    rng = np.random.RandomState(args.seed)
 
     logger.debug("Loading space")
     space = load_numpy(args.space).normalize()
@@ -53,73 +50,113 @@ def main():
     mask1 = data.word1.apply(lambda x: x in space.lookup)
     mask2 = data.word2.apply(lambda x: x in space.lookup)
 
-
     T = len(data)
     M1T = np.sum(mask1)
     M2T = np.sum(mask2)
-    logger.debug("")
-    logger.debug("Total Data: %6d" % T)
-    logger.debug("   LHS OOV: %6d ( %4.1f%% )" % (M1T, M1T*100./T))
-    logger.debug("   RHS OOV: %6d ( %4.1f%% )" % (M2T, M2T*100./T))
     data = data[mask1 & mask2].reset_index(drop=True)
     F = len(data)
-    logger.debug("     Final: %6d ( %4.1f%% )" % (F, F*100./T))
+    logger.debug("")
+    logger.debug("    Total Data: %5d" % T)
+    logger.debug("       LHS OOV: %5d ( %4.1f%% )" % (M1T, M1T*100./T))
+    logger.debug("       RHS OOV: %5d ( %4.1f%% )" % (M2T, M2T*100./T))
+    logger.debug("         Final: %5d ( %4.1f%% )" % (F, F*100./T))
     logger.debug("")
 
-    logger.debug("Generating %d folds..." % N_FOLDS)
-
-    # need our folds for cross validation
-    folds = fold.generate_folds_lhs(rng, data, n_folds=N_FOLDS)
-    train_sizes = np.array([len(f[0]) for f in folds], dtype=np.float)
-    test_sizes = np.array([len(f[1]) for f in folds], dtype=np.float)
-
-    logger.debug("Training sizes: %.1f" % np.mean(train_sizes))
-    logger.debug("    Test sizes: %.1f" % np.mean(test_sizes))
-    logger.debug(" Test-Tr ratio: %.1f%%" % np.mean(test_sizes*100./(train_sizes + test_sizes)))
-    logger.debug(" Percent data: %.1f%%" % np.mean((train_sizes + test_sizes)*100./F))
-    logger.debug("")
-
-    logger.debug("Setting up the model:")
-    model, features = models.load_setup(args.model)
-
+    if args.experiment == 'artificial':
+        np.random.seed(31337)
+        exists = {}
+        for i, row in data.iterrows():
+            exists[(row['word1'], row['word2'])] = row['entails']
+        fake_data = data.copy()
+        word2s = np.array(fake_data['word2'])
+        np.random.shuffle(word2s)
+        fake_data['word2'] = word2s
+        fake_data['entails'] = False
+        fake_mask = []
+        for i, row in fake_data.iterrows():
+            fake_mask.append((row['word1'], row['word2']) not in exists)
+        data = pd.concat([data, fake_data[fake_mask]], ignore_index=True)
 
     # dwp = data with predictions
     dwp = data.copy()
-    dwp['prediction'] = False
-    dwp['fold'] = -1
 
-    logger.debug("Generating features")
+    logger.debug("         Model: %s" % args.model)
+    model, features = models.load_setup(args.model)
+
+    logger.debug("      Features: %s" % features)
     X, y = models.generate_feature_matrix(data, space, features)
 
-    # perform cross validation
-    logger.debug("Performing experiment: %s" % args.experiment)
-    scores = []
-    for foldno, (train, test) in enumerate(folds):
-        logger.debug("   ... fold %2d/%2d" % (foldno, N_FOLDS))
-        # generate features
-        train_X, train_y = X[train], y[train]
-        test_X, test_y = X[test], y[test]
+    pooled_evals = []
 
-        model.fit(train_X, train_y)
-        preds_y = model.predict(test_X)
-        dwp.loc[test,'prediction'] = preds_y
-        dwp.loc[test,'fold'] = foldno
-        scores.append(metrics.f1_score(test_y, preds_y))
+    for seed in xrange(1, 21):
+        logger.debug("  Genenerating: %d folds" % N_FOLDS)
+        rng = np.random.RandomState(seed)
+        fold_key = 'fold_%02d' % seed
+        pred_key = 'prediction_%02d' % seed
+        dwp[pred_key] = False
+        dwp[fold_key] = -1
 
-    logger.info("F1 across CV: %.3f" % np.mean(scores))
-    logger.info("         std: %.3f" % np.std(scores))
-    logger.info("   F1 pooled: %.3f" % metrics.f1_score(dwp['entails'], dwp['prediction']))
+        # need our folds for cross validation
+        folds = fold.generate_folds_lhs(rng, data, n_folds=N_FOLDS)
+        train_sizes = np.array([len(f[0]) for f in folds], dtype=np.float)
+        test_sizes = np.array([len(f[1]) for f in folds], dtype=np.float)
+
+        logger.debug("Training sizes: %.1f" % np.mean(train_sizes))
+        logger.debug("    Test sizes: %.1f" % np.mean(test_sizes))
+        logger.debug(" Test-Tr ratio: %.1f%%" % np.mean(test_sizes*100./(train_sizes + test_sizes)))
+        logger.debug("  Percent data: %.1f%%" % np.mean((train_sizes + test_sizes)*100./F))
+
+        # perform cross validation
+        logger.debug("    Experiment: %s" % args.experiment)
+        scores = []
+        for foldno, (train, test) in enumerate(folds):
+            #logger.debug("   ... fold %2d/%2d" % (foldno, N_FOLDS))
+            # generate features
+            train_X, train_y = X[train], y[train]
+            test_X, test_y = X[test], y[test]
+
+            model.fit(train_X, train_y)
+            preds_y = model.predict(test_X)
+            dwp.loc[test,pred_key] = preds_y
+            dwp.loc[test,fold_key] = foldno
+            scores.append([metrics.f1_score(test_y, preds_y),
+                           metrics.precision_score(test_y, preds_y),
+                           metrics.recall_score(test_y, preds_y),
+                           metrics.accuracy_score(test_y, preds_y)])
+
+        if len(dwp[dwp[fold_key] == -1]) != 0:
+            logger.error("Some of the data wasn't predicted!\n" + dwp[dwp[fold_key] == -1])
 
 
-    dwp.to_csv("%s/exp:%s,data:%s,space:%s,model:%s,seed:%d.csv" % (
+        pooled_f1 = metrics.f1_score(dwp['entails'], dwp[pred_key])
+        pooled_p = metrics.precision_score(dwp['entails'], dwp[pred_key])
+        pooled_r = metrics.recall_score(dwp['entails'], dwp[pred_key])
+        pooled_a = metrics.accuracy_score(dwp['entails'], dwp[pred_key])
+
+        pooled_evals.append([pooled_f1, pooled_p, pooled_r, pooled_a])
+
+        f1, p, r, a = np.mean(scores, axis=0)
+        f1s, ps, rs, s = np.std(scores, axis=0)
+
+        logger.info("  F1 across CV: %.3f   %.3f" % (f1, f1s))
+        logger.info("   P across CV: %.3f   %.3f" % (p, ps))
+        logger.info("   R across CV: %.3f   %.3f" % (r, rs))
+        logger.info("   A across CV: %.3f   %.3f" % (a, s))
+        logger.debug("")
+
+    f1, p, r, a = np.mean(pooled_evals, axis=0)
+    f1s, ps, rs, s = np.std(pooled_evals, axis=0)
+    logger.info(" fin F1 pooled: %.3f   %.3f" % (f1, f1s))
+    logger.info(" fin  P pooled: %.3f   %.3f" % (p, ps))
+    logger.info(" fin  R pooled: %.3f   %.3f" % (r, rs))
+    logger.info(" fin  A pooled: %.3f   %.3f" % (a, s))
+    logger.debug("")
+
+    dwp.to_csv("%s/exp:%s,data:%s,space:%s,model:%s.csv.bz2" % (
         args.output, args.experiment, args.data,
         os.path.basename(args.space),
-        args.model, args.seed
-        ), index=False)
-
-    if len(dwp[dwp['fold'] == -1]) != 0:
-        logger.error("Some of the data wasn't predicted!\n" +
-                     dwp[dwp['fold'] == -1])
+        args.model
+        ), index=False, compression='bz2')
 
     #f1_results_csv.append({
     #    'data': DATA_FOLDER_SHORT,
