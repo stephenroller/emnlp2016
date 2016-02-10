@@ -15,10 +15,17 @@ SETUPS = {
     'lhs': ('linear', 'lhs'),
     'rhs': ('linear', 'rhs'),
     'concat': ('linear', 'concat'),
+    'concat2': ('lr2', 'concat'),
 
     # asym models
     'diff': ('linear', 'diff'),
     'diffsq': ('linear', 'diffsq'),
+
+    # asym lr
+    'diff2': ('lr2', 'diff'),
+
+    # asym lr
+    'diffsq2': ('lr2', 'diffsq'),
 
     # rb models
     'diffrbf': ('rbf', 'diff'),
@@ -112,9 +119,9 @@ def classifier_factory(name):
     elif name == 'rbf':
         return svm.SVC(kernel='rbf')
     elif name == 'lr2':
-        return linear_model.LogisticRegression(penalty='l2')
+        return linear_model.LogisticRegression(penalty='l2', solver='liblinear')
     elif name == 'lr1':
-        return linear_model.LogisticRegression(penalty='l1')
+        return linear_model.LogisticRegression(penalty='l1', solver='liblinear')
     elif name == 'baseline':
         return dummy.DummyClassifier(strategy='most_frequent')
     elif name == 'levy':

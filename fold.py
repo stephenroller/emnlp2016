@@ -41,6 +41,23 @@ def generate_folds_all(data, n_folds):
 
     return folds
 
+def generate_folds_column(rng, data, column):
+    stratwords = list(set(data[column]))
+
+    folds = []
+
+    for sw in stratwords:
+        testmask = (data[column] == sw)
+        test = data[testmask]
+        left_set = set(test['word1'])
+        right_set = set(test['word2'])
+        test_words = left_set.union(right_set)
+        trainmask = (~data['word1'].apply(test_words.__contains__) &
+                     ~data['word2'].apply(test_words.__contains__))
+        folds.append((np.array(data.index[trainmask]), np.array(data.index[testmask])))
+
+    return folds
+
 def generate_folds_lhs(rng, data, n_folds):
     # get unique words
     lhwords = list(set(data.word1))

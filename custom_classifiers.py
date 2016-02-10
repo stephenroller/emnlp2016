@@ -22,4 +22,7 @@ class ThresholdClassifier(BaseEstimator, ClassifierMixin):
         feature = X[:,0]
         return feature >= self.threshold_
 
+    def predict_proba(self, X):
+        return np.concatenate([1-X, X], axis=1)
+
 
