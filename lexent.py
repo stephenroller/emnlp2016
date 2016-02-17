@@ -59,7 +59,53 @@ def consolidate(list_of_dicts):
         consolidated[k] = np.array([d[k] for d in list_of_dicts])
     return consolidated
 
-def standard_experiment(data, X, y, model):
+def feature_extraction(X, y, model, space):
+    np.set_printoptions(suppress=True)
+    n_output = 30
+    model.fit(X, y)
+    D = space.matrix.shape[1]
+    segments = int(X.shape[1] / D)
+    full_magn = np.sum(np.square(model.coef_))
+    for s in xrange(segments):
+        l = D*s
+        r = D*(s+1)
+        feats = model.coef_[0,l:r]
+        p = np.sum(np.square(feats)) / full_magn
+        print "Segment #%d [%d-%d] [%2.1f%%]" % (s + 1, l, r, 100*p)
+        print feats
+        word_ranks = space.matrix.dot(feats)
+        sorted = word_ranks.argsort()
+        print "  Strongest words:"
+        for i in xrange(n_output):
+            idx = sorted[-(i+1)]
+            score = word_ranks[idx]
+            word = space.vocab[idx]
+            print "    %6.3f  %s" % (score, word)
+        print "  Weakest words:"
+        for i in xrange(n_output-1, -1, -1):
+            idx = sorted[i]
+            score = word_ranks[idx]
+            word = space.vocab[idx]
+            print "    %6.3f  %s" % (score, word)
+        ctx_ranks = space.cmatrix.dot(feats)
+        sorted = ctx_ranks.argsort()
+        print "  Strongest contexts:"
+        for i in xrange(n_output):
+            idx = sorted[-(i+1)]
+            score = ctx_ranks[idx]
+            word = space.cvocab[idx]
+            print "    %6.3f  %s" % (score, word)
+        print "  Weakest contexts:"
+        for i in xrange(n_output-1, -1, -1):
+            idx = sorted[i]
+            score = ctx_ranks[idx]
+            word = space.cvocab[idx]
+            print "    %6.3f  %s" % (score, word)
+
+
+
+
+def standard_experiment(data, X, y, model, tuning=False):
     with_probas = hasattr(model, 'predict_proba')
 
     # data with predictions
@@ -87,7 +133,7 @@ def standard_experiment(data, X, y, model):
 
         # perform cross validation
 
-        pooled_eval, predictions, cv_scores = cv_trials(X, y, folds, model, tuning=False)
+        pooled_eval, predictions, cv_scores = cv_trials(X, y, folds, model, tuning=tuning)
         pooled_evals.append(pooled_eval)
 
         for k in cv_scores.keys():
@@ -159,7 +205,10 @@ def cv_trials(X, y, folds, model, tuning=False):
     # now we want to compute global evaluations, and consolidate metrics
     cv_scores = consolidate(cv_scores)
 
-    preds_y = tuning and predictions['adj_pred'] or predictions['pred']
+    if tuning:
+        preds_y = predictions['adj_pred']
+    else:
+        preds_y = predictions['pred']
     pooled_eval = {'f1': metrics.f1_score(y, preds_y),
                     'p': metrics.precision_score(y, preds_y),
                     'r': metrics.recall_score(y, preds_y),
@@ -170,7 +219,6 @@ def cv_trials(X, y, folds, model, tuning=False):
         pooled_eval['roc'] = metrics.roc_auc_score(y, proba_y)
 
     return pooled_eval, predictions, cv_scores
-
 
 
 def main():
@@ -191,8 +239,7 @@ def main():
 
     # Steps that are the same regardless of experiments
     logger.debug("Loading space")
-    nonnorm = load_numpy(args.space)
-    space = nonnorm.normalize()
+    space = load_numpy(args.space).normalize()
 
     # Handle vocabulary issues
     logger.debug("Reading data")
@@ -237,7 +284,9 @@ def main():
     X, y = models.generate_feature_matrix(data, space, features)
 
     if args.experiment == 'standard':
-        standard_experiment(data, X, y, model)
+        standard_experiment(data, X, y, model, tuning=args.tuning)
+    elif args.experiment == 'featext':
+        feature_extraction(X, y, model, space)
 
 
 

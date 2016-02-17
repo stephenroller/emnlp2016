@@ -12,8 +12,8 @@ SETUPS = {
     'cosine': ('threshold', 'cosine'),
 
     # baseline memorizations
-    'lhs': ('linear', 'lhs'),
-    'rhs': ('linear', 'rhs'),
+    'lhs': ('lr2', 'lhs'),
+    'rhs': ('lr2', 'rhs'),
     'concat': ('linear', 'concat'),
     'concat2': ('lr2', 'concat'),
 
@@ -22,9 +22,11 @@ SETUPS = {
     'diffsq': ('linear', 'diffsq'),
 
     # asym lr
+    'diff1': ('lr1', 'diff'),
     'diff2': ('lr2', 'diff'),
 
     # asym lr
+    'diffsq1': ('lr1', 'diffsq'),
     'diffsq2': ('lr2', 'diffsq'),
 
     # rb models
@@ -84,7 +86,7 @@ def generate_concat_matrix(data, space):
     return X
 
 def generate_lhs_matrix(data, space):
-    lhs = words2matrix(data.word2, space)
+    lhs = words2matrix(data.word1, space)
     return lhs
 
 def generate_rhs_matrix(data, space):
