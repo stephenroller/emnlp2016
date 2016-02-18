@@ -3,7 +3,7 @@
 import numpy as np
 from sklearn import svm, linear_model, dummy
 
-from custom_classifiers import ThresholdClassifier
+from custom_classifiers import ThresholdClassifier, BDSM
 
 SETUPS = {
     # baseline most common
@@ -32,6 +32,9 @@ SETUPS = {
     # rb models
     'diffrbf': ('rbf', 'diff'),
     'concatrbf': ('rbf', 'concat'),
+
+    # other models
+    'bdsm': ('bdsm', 'concat'),
 
     # others I dont want now
     #('lhs', 'lr1', 'lhs'),
@@ -126,6 +129,8 @@ def classifier_factory(name):
         return linear_model.LogisticRegression(penalty='l1', solver='liblinear')
     elif name == 'baseline':
         return dummy.DummyClassifier(strategy='most_frequent')
+    elif name == 'bdsm':
+        return BDSM()
     elif name == 'levy':
         # todo this
         return None
