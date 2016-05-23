@@ -2,17 +2,91 @@
 
 import numpy as np
 
-import keras
-import keras.backend as K
-from keras import initializations
-from keras import activations
-from keras.models import Sequential
-from keras.layers.core import Layer
-from keras.regularizers import l2
-from keras.optimizers import SGD
-
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import precision_recall_curve
+import sklearn.svm
+import sklearn.tree
+import sklearn.naive_bayes
+import sklearn.ensemble
+import sklearn.linear_model
+from sklearn.preprocessing import normalize
+
+class SuperTreeClassifier(BaseEstimator, ClassifierMixin):
+    def __init__(self, n_features=4):
+        self.models = []
+        self.linear = sklearn.linear_model.LogisticRegression(penalty='l2', solver='liblinear', class_weight='balanced')
+        self.n = n_features
+        #self.final = sklearn.tree.DecisionTreeClassifier(max_depth=9)
+        #self.final = sklearn.naive_bayes.MultinomialNB()
+        #self.final = sklearn.naive_bayes.GaussianNB()
+        #self.final = sklearn.naive_bayes.BernoulliNB()
+        self.final = sklearn.svm.SVC(kernel='rbf', class_weight='balanced', max_iter=2000)
+        #kernel='linear', class_weight='balanced', max_iter=2000, verbose=True)
+        #self.final = sklearn.svm.LinearSVC(dual=False)
+
+    def _subproj(self, plane, X):
+        plane = plane / np.sqrt(plane.dot(plane))
+        D = X.shape[1] / 2
+        cos = np.sum(np.multiply(X[:,:D], X[:,D:]), axis=1)
+        proj1 = X[:,:D].dot(plane)
+        proj2 = X[:,D:].dot(plane)
+        X1 = normalize(X[:,:D] - np.outer(proj1, plane))
+        X2 = normalize(X[:,D:] - np.outer(proj2, plane))
+        Xn = np.concatenate([X1, X2], axis=1)
+
+        return np.array([cos, proj1, proj2]), Xn # this one's pretty good
+        #return np.array([cos, proj1, proj2, proj2 - proj1]), Xn # this one's pretty good
+
+    def fit(self, X, y):
+        self.models = []
+        from sklearn.base import clone
+        from sklearn.metrics import f1_score
+        self.planes = []
+        extraction = []
+        for i in xrange(self.n):
+            D = X.shape[1] / 2
+            #self.linear.fit(X[:,:D], y)
+            #f1l = f1_score(y, self.linear.predict(X[:,:D]))
+            #hyperplane = self.linear.coef_[0]
+
+            #self.linear.fit(X[:,D:], y)
+            #f1r = f1_score(y, self.linear.predict(X[:,D:]))
+
+            #if f1l < f1r: hyperplane = self.linear.coef_[0]
+            #print max(f1l, f1r)
+
+            # copy it for feature extraction purposes
+            self.linear.fit(X, y)
+            self.models.append(clone(self.linear))
+            self.models[-1].coef_ = self.linear.coef_
+
+            lhs = self.linear.coef_[0,:D]
+            rhs = self.linear.coef_[0,D:]
+            if lhs.dot(lhs) > rhs.dot(rhs):
+                hyperplane = lhs
+            else:
+                hyperplane = rhs
+            feats, X = self._subproj(hyperplane, X)
+            hyperplane = hyperplane / np.sqrt(hyperplane.dot(hyperplane))
+            extraction.append(feats)
+            self.planes.append(hyperplane)
+
+        Xe = (np.concatenate(extraction).T)
+        #Xet = Xe
+        #Xe = np.concatenate([Xe, X], axis=1)
+        self.final.fit(Xe, y)
+        return self
+
+    def predict(self, X):
+        extraction = []
+        for p in self.planes:
+            feats, X = self._subproj(p, X)
+            extraction.append(feats)
+        Xe = (np.concatenate(extraction).T)
+        #Xet = Xe
+        #Xe = np.concatenate([Xe, X], axis=1)
+        #return self.nb.predict(Xe)
+        return self.final.predict(Xe)
 
 class ThresholdClassifier(BaseEstimator, ClassifierMixin):
     def __init__(self):
@@ -34,83 +108,28 @@ class ThresholdClassifier(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X):
         return np.concatenate([1-X, X], axis=1)
 
-class BdsmLayer(Layer):
-    def __init__(self, input_dim, hidden_dim, init='glorot_uniform', activation='sigmoid'):
-        self.D = input_dim
-        self.input_dim = self.D * 2
-        self.H = hidden_dim
-        self.init = initializations.get(init)
-        self.activation = activations.get(activation)
-        self.output_dim = 1
+def levy_kernel(U, V):
+    # kernel((ul, ur), (vl,  vr)) =
+    #   (ul ur * vl vr) ^ (alpha / 2) *
+    #   (ul vl * ur vr) ^ (1 - alpha / 2)
+    alpha = 0.5
 
-        self.W = self.init((self.D, self.H))
-        self.b = K.zeros((self.H,))
-        self.W_reg = l2(1e-5)
-        self.W_reg.set_param(self.W)
-        self.regularizers = [self.W_reg]
+    D = U.shape[1] / 2
+    Ul, Ur = U[:,:D], U[:,D:]
+    Vl, Vr = V[:,:D], V[:,D:]
+    ulur = np.array([np.multiply(Ul, Ur).sum(axis=1)]).clip(0, 1e99)
+    vlvr = np.array([np.multiply(Vl, Vr).sum(axis=1)]).clip(0, 1e99)
+    ulvl = Ul.dot(Vl.T)
+    urvr = Ur.dot(Vr.T)
 
-        self.params = [self.W, self.b]
+    a = np.dot(ulur.T, vlvr)
+    b = np.multiply(ulvl, urvr).clip(0, 1e99)
 
-        super(BdsmLayer, self).__init__(input_shape=(self.input_dim,))
+    a2 = np.power(a, alpha / 2.)
+    b2 = np.power(b, 1 - alpha / 2.)
 
-    def get_output(self, train=False):
-        X = self.get_input(train)
-
-        lhs = X[:,:self.D]
-        rhs = X[:,self.D:]
-
-        lhs2 = self.activation(K.dot(lhs, self.W) + self.b)
-        rhs2 = self.activation(K.dot(rhs, self.W) + self.b)
-
-        if True or train:
-            upper = K.maximum(1-rhs2, lhs2)
-            lower = K.min(upper, axis=-1)
-            return K.permute_dimensions(lower, (0, 'x'))
-        else:
-            lhsrnd = K.round(lhs2)
-            rhsrnd = K.round(rhs2)
-            num = K.sum(lhsrnd * rhsrnd, axis=-1)
-            from keras.backend.common import _EPSILON
-            den = K.clip(K.sum(lhsrnd, axis=-1), _EPSILON, self.H)
-            frac = num / den
-            return K.permute_dimensions(frac, (0, 'x'))
+    retval = np.multiply(a2, b2)
+    return retval
 
 
-
-
-class BDSM(BaseEstimator, ClassifierMixin):
-    def __init__(self, H=132):
-        D = 300
-        self.H = H
-        self.model = Sequential()
-        self.model.add(BdsmLayer(D, self.H))
-        sgd = SGD(lr=0.01, momentum=0.99)
-        self.model.compile(loss='mse', optimizer=sgd)
-        self.inits = [p.get_value() for p in self.model.params]
-        self.eta = 0.5
-
-    def fit(self, X, y):
-        y = y.astype(np.int)
-        # need to reset the model
-        for p, w in zip(self.model.params, self.inits):
-            p.set_value(w)
-            pass
-        self.model.fit(X, y, verbose=1, batch_size=32, nb_epoch=100, shuffle=True)
-        # okay we fit the model, but we still need the threshold
-        #values = [p.get_value() for p in self.model.params]
-        values = self.model.predict(X)[:,0]
-        p, r, t = precision_recall_curve(y, values)
-        f1 = np.divide(2 * np.multiply(p, r), p + r)
-        f1[np.isnan(f1)] = -1.0
-        self.eta = t[f1.argmax()]
-        print "eta = %.3f, f1[train] = %.3f" % (self.eta, f1.max())
-        return self
-
-    def predict(self, X):
-        probas = self.predict_proba(X)
-        return probas[:,1] > self.eta
-
-    def predict_proba(self, X):
-        probas = self.model.predict(X)
-        return np.concatenate([1-probas, probas], axis=1)
 

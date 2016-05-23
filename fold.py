@@ -14,30 +14,30 @@ def generate_folds_levy(data, data_name):
 
     return [(np.array(train_merge.idx), np.array(test_merge.idx))]
 
-def generate_folds_all(data, n_folds):
+def generate_folds_all(rng, data, percent_test, num_trials):
     all_vocab = list(set(data.word1).union(data.word2))
-    np.random.shuffle(all_vocab)
-
-    folds_index = []
-    for i in xrange(n_folds):
-        folds_index.append(set(all_vocab[i::n_folds]))
 
     folds = []
-    for i in xrange(n_folds):
-        idx = folds_index[i]
-        testmask = data.word1.apply(lambda x: x in idx) & data.word2.apply(lambda x: x in idx)
-        trainmask = data.word1.apply(lambda x: x not in idx) & data.word2.apply(lambda x: x not in idx)
+    for i in xrange(num_trials):
+        rng.shuffle(all_vocab)
+        V = len(all_vocab)
+        S = int(V*percent_test)
+        test_vocab = set(all_vocab[:S])
+        train_vocab = set(all_vocab[S:])
 
-        trainvocab = set(data[trainmask].word1).union(set(data[trainmask].word2))
-        testvocab = set(data[testmask].word1).union(set(data[testmask].word2))
-        assert len(trainvocab.intersection(testvocab)) == 0
+        testmask1 = data.word1.apply(lambda x: x in test_vocab)
+        testmask2 = data.word2.apply(lambda x: x in test_vocab)
+        testmask = testmask1 & testmask2
+
+        trainmask1 = data.word1.apply(lambda x: x in train_vocab)
+        trainmask2 = data.word2.apply(lambda x: x in train_vocab)
+        trainmask = trainmask1 & trainmask2
+
+        test_vocab2 = set(data[testmask].word1).union(set(data[testmask].word2))
+        train_vocab2 = set(data[trainmask].word1).union(set(data[trainmask].word2))
+        assert len(train_vocab2.intersection(test_vocab2)) == 0
 
         folds.append((np.array(data.index[trainmask]), np.array(data.index[testmask])))
-
-    #all_seen = set()
-    #for train, test in folds:
-    #    all_seen.update(test)
-    #assert len(all_seen) == len(data)
 
     return folds
 
@@ -82,6 +82,7 @@ def generate_folds_lhs(rng, data, n_folds):
         # no words in rhs of test in lhs of train
         rhsmask3 = data.word1.apply(lambda x: x in rhswords)
         # overlap of these 3 conditions
+        #trainmask = ~(testmask | rhsmask | rhsmask2 | rhsmask3)
         trainmask = ~(testmask | rhsmask | rhsmask2 | rhsmask3)
 
         #wasted = ~(trainmask | testmask)
