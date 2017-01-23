@@ -226,7 +226,7 @@ def generate_feature_matrix(data, space, features):
         X = np.concatenate([X1, X2], axis=1)
     else:
         raise ValueError("Can't generate %s features" % features)
-    y = data.entails.as_matrix()
+    y = data.label.as_matrix()
     return X, y
 
 def dict_union(a, b):

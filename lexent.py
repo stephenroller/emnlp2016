@@ -42,8 +42,6 @@ def longest_vector_posmatch(search, space):
         return None
     options = space.posless[search]
     pos = max(options.keys(), key=options.__getitem__)
-    #print search, options, pos
-    #import ipdb; ipdb.set_trace()
     return search + '/' + pos
 
 def always_nn_posmatch(search, space):
@@ -146,7 +144,7 @@ def standard_experiment(data, X, y, model, hyper, args):
     pooled_eval, predictions, cv_scores = cv_trials(X, y, folds, model, hyper)
     dwp['prediction'] = predictions['pred']
     dwp['foldno'] = predictions['foldno']
-    dwp['correct'] = (dwp['prediction'] == dwp['entails'])
+    dwp['correct'] = (dwp['prediction'] == dwp['label'])
 
     for i, v in enumerate(cv_scores['f1']):
         logger.info("  Fold %02d F1: %.3f" % (i + 1, v))
@@ -184,7 +182,6 @@ def cv_trials(X, y, folds, model, hyper):
             model.set_params(**these_params)
             model.fit(train_X, train_y)
             this_val_f1 = metrics.f1_score(val_y, model.predict(val_X))
-            print these_params, this_val_f1
             if not best_params or this_val_f1 > best_val_f1:
                 best_params = these_params
                 best_val_f1 = this_val_f1
@@ -197,7 +194,6 @@ def cv_trials(X, y, folds, model, hyper):
         predictions['pred'][test] = preds_y
 
         predictions['foldno'][test] = foldno
-        #print "   (f1 #%d: %.3f)" % (foldno, metrics.f1_score(test_y, preds_y))
 
         fold_eval = {'f1': metrics.f1_score(test_y, preds_y),
                       'p': metrics.precision_score(test_y, preds_y),
@@ -221,7 +217,7 @@ def cv_trials(X, y, folds, model, hyper):
     return pooled_eval, predictions, cv_scores
 
 def load_data(filename, space):
-    data = pd.read_table(filename, header=None, names=('word1', 'word2', 'entails'))
+    data = pd.read_table(filename)
     data['word1'] = data['word1'].apply(lambda x: best_pos_match(x, space))
     data['word2'] = data['word2'].apply(lambda x: best_pos_match(x, space))
 
@@ -267,7 +263,7 @@ def main():
 
     # Handle vocabulary issues
     logger.debug("Reading data")
-    data = load_data("data/%s/data.tsv" % args.data, space)
+    data = load_data(args.data, space)
 
     logger.debug("         Model: %s" % args.model)
     model, features, hyper = models.load_setup(args.model)

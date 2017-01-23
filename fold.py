@@ -14,20 +14,6 @@ def generate_folds_random(rng, data, n_folds):
                       np.array(data.index[testmask])))
     return folds
 
-def generate_folds_levy(data, data_name):
-    levy_train = pd.read_table("%s/data_lex_train.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
-    levy_val = pd.read_table("%s/data_lex_val.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
-    levy_test = pd.read_table("%s/data_lex_test.tsv" % DATA_FOLDER, header=None, names=('word1', 'word2', 'entails'))
-
-    data_copy = data.copy()
-    data_copy['idx'] = data_copy.index
-
-    train_merge = pd.merge(data_copy, levy_train, on=('word1', 'word2', 'entails'))
-    val_merge = pd.merge(data_copy, levy_val, on=('word1', 'word2', 'entails'))
-    test_merge = pd.merge(data_copy, levy_test, on=('word1', 'word2', 'entails'))
-
-    return [(np.array(train_merge.idx), np.array(val_merge.idx), np.array(test_merge.idx))]
-
 def generate_folds_lhs(rng, data, n_folds):
     # get unique words
     lhwords = list(set(data.word1))

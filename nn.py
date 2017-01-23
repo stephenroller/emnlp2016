@@ -11,15 +11,6 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import precision_recall_curve, f1_score
 import theano.tensor as T
 
-class StephenRegularizer(Regularizer):
-    def __init__(self, l2, size):
-        self.l2 = l2
-        self.size = size
-
-    def __call__(self, loss):
-        diffeye = self.p.T.dot(self.p) - np.eye(self.size)
-        return loss + self.l2 * T.sum(T.square(diffeye))
-
 
 class MirrorLayer(Layer):
     def __init__(self, input_dim, H):
@@ -29,8 +20,7 @@ class MirrorLayer(Layer):
         self.init = initializations.get('glorot_uniform')
         self.W = self.init((self.D, self.H))
         #self.b = K.zeros((self.H,))
-        self.W_reg = StephenRegularizer(1e-4, H)
-        #self.W_reg = l2(1e-3)
+        self.W_reg = l2(1e-3)
         self.W_reg.set_param(self.W)
         #self.b_reg = l2(1e-3)
         #self.b_reg.set_param(self.b)
