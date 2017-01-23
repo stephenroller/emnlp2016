@@ -5,37 +5,44 @@ import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import precision_recall_curve
 import sklearn.svm
-import sklearn.tree
-import sklearn.naive_bayes
-import sklearn.ensemble
 import sklearn.linear_model
 from sklearn.preprocessing import normalize
 
 class SuperTreeClassifier(BaseEstimator, ClassifierMixin):
-    def __init__(self, n_features=4):
+    def __init__(self, n_features=4, proj=True, cos=True, incl=True):
         self.models = []
         self.linear = sklearn.linear_model.LogisticRegression(penalty='l2', solver='liblinear', class_weight='balanced')
-        self.n = n_features
-        #self.final = sklearn.tree.DecisionTreeClassifier(max_depth=9)
-        #self.final = sklearn.naive_bayes.MultinomialNB()
-        #self.final = sklearn.naive_bayes.GaussianNB()
-        #self.final = sklearn.naive_bayes.BernoulliNB()
-        self.final = sklearn.svm.SVC(kernel='rbf', class_weight='balanced', max_iter=2000)
-        #kernel='linear', class_weight='balanced', max_iter=2000, verbose=True)
-        #self.final = sklearn.svm.LinearSVC(dual=False)
+        self.n_features = n_features
+        self.proj = proj
+        self.cos = cos
+        self.incl = incl
+        #self.final = sklearn.svm.SVC(kernel='rbf', class_weight='balanced', max_iter=2000)
+        self.final = sklearn.linear_model.LogisticRegression(penalty='l2', solver='liblinear', class_weight='balanced')
+
+    def _rejection(self, plane, X):
+        plane = plane / np.sqrt(plane.dot(plane))
+        D = X.shape[1]
+        cos = np.sum(np.multiply(X, X), axis=1)
+        proj = X.dot(plane)
+        rejection = normalize(X - np.outer(proj, plane))
+        return proj, rejection
 
     def _subproj(self, plane, X):
-        plane = plane / np.sqrt(plane.dot(plane))
         D = X.shape[1] / 2
         cos = np.sum(np.multiply(X[:,:D], X[:,D:]), axis=1)
-        proj1 = X[:,:D].dot(plane)
-        proj2 = X[:,D:].dot(plane)
-        X1 = normalize(X[:,:D] - np.outer(proj1, plane))
-        X2 = normalize(X[:,D:] - np.outer(proj2, plane))
+        proj1, X1 = self._rejection(plane, X[:,:D])
+        proj2, X2 = self._rejection(plane, X[:,D:])
         Xn = np.concatenate([X1, X2], axis=1)
 
-        return np.array([cos, proj1, proj2]), Xn # this one's pretty good
-        #return np.array([cos, proj1, proj2, proj2 - proj1]), Xn # this one's pretty good
+        #return np.array([cos, proj1, proj2]), Xn # this one's pretty good
+        features = []
+        if self.proj:
+            features += [proj1, proj2]
+        if self.cos:
+            features += [cos]
+        if self.incl:
+            features += [proj2 - proj1]
+        return np.array(features), Xn
 
     def fit(self, X, y):
         self.models = []
@@ -43,7 +50,7 @@ class SuperTreeClassifier(BaseEstimator, ClassifierMixin):
         from sklearn.metrics import f1_score
         self.planes = []
         extraction = []
-        for i in xrange(self.n):
+        for i in xrange(self.n_features):
             D = X.shape[1] / 2
             #self.linear.fit(X[:,:D], y)
             #f1l = f1_score(y, self.linear.predict(X[:,:D]))
@@ -88,6 +95,13 @@ class SuperTreeClassifier(BaseEstimator, ClassifierMixin):
         #return self.nb.predict(Xe)
         return self.final.predict(Xe)
 
+    def set_params(self, **kwargs):
+        for hp in ['n_features', 'proj', 'cos', 'incl']:
+            if hp in kwargs:
+                setattr(self, hp, kwargs[hp])
+                del kwargs[hp]
+        self.final.set_params(**kwargs)
+
 class ThresholdClassifier(BaseEstimator, ClassifierMixin):
     def __init__(self):
         self.threshold_ = 0.0
@@ -108,7 +122,7 @@ class ThresholdClassifier(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X):
         return np.concatenate([1-X, X], axis=1)
 
-def levy_kernel(U, V):
+def ksim_kernel(U, V):
     # kernel((ul, ur), (vl,  vr)) =
     #   (ul ur * vl vr) ^ (alpha / 2) *
     #   (ul vl * ur vr) ^ (1 - alpha / 2)

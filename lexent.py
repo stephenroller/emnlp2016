@@ -11,6 +11,7 @@ import pandas as pd
 from sklearn import metrics
 from scipy.stats import linregress
 from sklearn.preprocessing import normalize
+from sklearn.grid_search import ParameterGrid
 
 from utdeftvs import load_numpy
 
@@ -116,29 +117,6 @@ def feature_extraction(X, y, model, space, data):
             print "    %6.3f %s  %s" % (score, indata, ctx)
     return model.coef_
 
-def random_experiment(data, X, y, model):
-    n_trials = 100
-    rng = np.random.RandomState(1338)
-    folds = fold.generate_folds_all(rng, data, 0.3, n_trials)
-
-    train_size = 0
-    test_size = 0
-    for train, test in folds:
-        train_size += len(train)
-        test_size += len(test)
-    train_size /= float(n_trials)
-    test_size /= float(n_trials)
-    logger.info("Train / Test size: %.1f / %.1f" % (train_size, test_size))
-
-    pooled_evals, predictions, cv_scores = cv_trials(X, y, folds, model)
-
-    for k in cv_scores.keys():
-        mu = cv_scores[k].mean()
-        sigma = cv_scores[k].std()
-        logger.info(" fin%3s pooled: %.3f   %.3f" % (k.upper(), mu, sigma))
-
-    logger.debug("")
-
 def levy_experiment(data_filename, model, features, space):
     train_data = load_data("data/%s/data_lex_train.tsv" % data_filename, space)
     val_data = load_data("data/%s/data_lex_val.tsv" % data_filename, space)
@@ -154,57 +132,42 @@ def levy_experiment(data_filename, model, features, space):
     logger.info("[ val] F1: %.3f" % metrics.f1_score(val_preds_y, val_y))
     logger.info("[test] F1: %.3f" % metrics.f1_score(test_preds_y, test_y))
 
-def standard_experiment(data, X, y, model, args, tuning=False):
-    with_probas = hasattr(model, 'predict_proba')
-
+def random_experiment(data, X, y, model, hyper, args):
     # data with predictions
     dwp = data.copy()
 
-    pooled_evals = []
-
     #for seed in xrange(1, 21):
-    for seed in [1]:
-        logger.debug("       On seed: %d / %d" % (seed, 20))
-        logger.debug("  Genenerating: %d folds" % N_FOLDS)
-        rng = np.random.RandomState(seed)
-        fold_key = 'fold_%02d' % seed
-        pred_key = 'prediction_%02d' % seed
-        pred_prob_key = 'probability_%02d' % seed
+    seed = 1
+    logger.debug("       On seed: %d / %d" % (seed, 20))
+    logger.debug("  Genenerating: %d folds" % N_FOLDS)
+    rng = np.random.RandomState(seed)
+    fold_key = 'fold_%02d' % seed
+    pred_key = 'prediction_%02d' % seed
+    pred_prob_key = 'probability_%02d' % seed
 
-        # need our folds for cross validation
-        folds = fold.generate_folds_lhs(rng, data, n_folds=N_FOLDS)
-        train_sizes = np.array([len(f[0]) for f in folds], dtype=np.float)
-        test_sizes = np.array([len(f[1]) for f in folds], dtype=np.float)
+    # need our folds for cross validation
+    folds = fold.generate_folds_random(rng, data, n_folds=N_FOLDS)
+    train_sizes = np.array([len(f[0]) for f in folds], dtype=np.float)
+    val_sizes = np.array([len(f[1]) for f in folds], dtype=np.float)
+    test_sizes = np.array([len(f[2]) for f in folds], dtype=np.float)
 
-        logger.debug("Training sizes: %.1f" % np.mean(train_sizes))
-        logger.debug("    Test sizes: %.1f" % np.mean(test_sizes))
-        logger.debug(" Test-Tr ratio: %.1f%%" % np.mean(test_sizes*100./(train_sizes + test_sizes)))
-        logger.debug("  Percent data: %.1f%%" % np.mean((train_sizes + test_sizes)*100./len(y)))
+    logger.debug("   Train sizes: %.1f" % np.mean(train_sizes))
+    logger.debug("     Val sizes: %.1f" % np.mean(val_sizes))
+    logger.debug("    Test sizes: %.1f" % np.mean(test_sizes))
+    logger.debug(" Test-Tr ratio: %.1f%%" % np.mean(test_sizes*100./(train_sizes + test_sizes)))
+    logger.debug("  Percent data: %.1f%%" % np.mean((train_sizes + test_sizes)*100./len(y)))
 
-        # perform cross validation
+    # perform cross validation
+    pooled_eval, predictions, cv_scores = cv_trials(X, y, folds, model, hyper)
+    dwp['prediction'] = predictions['pred']
 
-        pooled_eval, predictions, cv_scores = cv_trials(X, y, folds, model, tuning=tuning)
-        pooled_evals.append(pooled_eval)
-        dwp['prediction'] = predictions['pred']
+    for i, v in enumerate(cv_scores['f1']):
+        logger.info("  Fold %02d F1: %.3f" % (i + 1, v))
 
-        for i, v in enumerate(cv_scores['f1']):
-            logger.info("  Fold %02d F1: %.3f" % (i + 1, v))
-
-        for k in cv_scores.keys():
-            mu = cv_scores[k].mean()
-            sigma = cv_scores[k].std()
-            logger.info(" %3s across CV: %.3f   %.3f" % (k.upper(), mu, sigma))
-        logger.debug("")
-        #if len(dwp[dwp[fold_key] == -1]) != 0:
-        #    logger.error("Some of the data wasn't predicted!\n" + dwp[dwp[fold_key] == -1])
-
-
-    pooled_evals = consolidate(pooled_evals)
-    for k in pooled_evals.keys():
-        mu = pooled_evals[k].mean()
-        sigma = pooled_evals[k].std()
-        logger.info(" fin%3s pooled: %.3f   %.3f" % (k.upper(), mu, sigma))
-
+    for k in cv_scores.keys():
+        mu = cv_scores[k].mean()
+        sigma = cv_scores[k].std()
+        logger.info(" %3s across CV: %.3f   %.3f" % (k.upper(), mu, sigma))
     logger.debug("")
 
     if args.output:
@@ -214,34 +177,85 @@ def standard_experiment(data, X, y, model, args, tuning=False):
             args.model
             ), index=False, compression='bz2')
 
-def cv_trials(X, y, folds, model, tuning=False):
-    with_probas = hasattr(model, 'predict_proba')
-    tuning = with_probas and tuning # force tuning off if there aren't probas
+
+def standard_experiment(data, X, y, model, hyper, args):
+    # data with predictions
+    dwp = data.copy()
+
+    seed = 1
+    logger.debug("       On seed: %d / %d" % (seed, 20))
+    logger.debug("  Genenerating: %d folds" % N_FOLDS)
+    rng = np.random.RandomState(seed)
+    fold_key = 'fold_%02d' % seed
+    pred_key = 'prediction_%02d' % seed
+    pred_prob_key = 'probability_%02d' % seed
+
+    # need our folds for cross validation
+    folds = fold.generate_folds_lhs(rng, data, n_folds=N_FOLDS)
+    train_sizes = np.array([len(f[0]) for f in folds], dtype=np.float)
+    val_sizes = np.array([len(f[1]) for f in folds], dtype=np.float)
+    test_sizes = np.array([len(f[2]) for f in folds], dtype=np.float)
+
+    logger.debug("   Train sizes: %.1f" % np.mean(train_sizes))
+    logger.debug("     Val sizes: %.1f" % np.mean(val_sizes))
+    logger.debug("    Test sizes: %.1f" % np.mean(test_sizes))
+    logger.debug(" Test-Tr ratio: %.1f%%" % np.mean(test_sizes*100./(train_sizes + test_sizes)))
+    logger.debug("  Percent data: %.1f%%" % np.mean((train_sizes + test_sizes)*100./len(y)))
+
+    # perform cross validation
+
+    pooled_eval, predictions, cv_scores = cv_trials(X, y, folds, model, hyper)
+    dwp['prediction'] = predictions['pred']
+    dwp['foldno'] = predictions['foldno']
+    dwp['correct'] = (dwp['prediction'] == dwp['entails'])
+
+    for i, v in enumerate(cv_scores['f1']):
+        logger.info("  Fold %02d F1: %.3f" % (i + 1, v))
+
+    for k in cv_scores.keys():
+        mu = cv_scores[k].mean()
+        sigma = cv_scores[k].std()
+        logger.info(" %3s across CV: %.3f   %.3f" % (k.upper(), mu, sigma))
+    logger.debug("")
+
+    if args.output:
+        dwp.to_csv("%s/exp:%s,data:%s,space:%s,model:%s.csv.bz2" % (
+            args.output, args.experiment, args.data,
+            os.path.basename(args.space),
+            args.model
+            ), index=False, compression='bz2')
+
+def cv_trials(X, y, folds, model, hyper):
     N = len(y)
 
     cv_scores = []
     predictions = {
         'pred': np.zeros(N, dtype=np.bool),
-        'adj_pred': np.zeros(N, dtype=np.bool),
         'proba': np.zeros(N),
         'foldno': np.zeros(N, dtype=np.int32) - 1,
     }
-
-    for foldno, (train, test) in enumerate(folds):
+    pg = list(ParameterGrid(hyper))
+    for foldno, (train, val, test) in enumerate(folds):
         train_X, train_y = X[train], y[train]
+        val_X, val_y = X[val], y[val]
         test_X, test_y = X[test], y[test]
-        model.fit(train_X, train_y)
+        best_params = None
+        best_val_f1 = None
+        for these_params in pg:
+            model.set_params(**these_params)
+            model.fit(train_X, train_y)
+            this_val_f1 = metrics.f1_score(val_y, model.predict(val_X))
+            print these_params, this_val_f1
+            if not best_params or this_val_f1 > best_val_f1:
+                best_params = these_params
+                best_val_f1 = this_val_f1
+        if len(pg) > 1:
+            model.set_params(**best_params)
+            model.fit(train_X, train_y)
+        train_f1 = metrics.f1_score(train_y, model.predict(train_X))
+
         preds_y = model.predict(test_X)
         predictions['pred'][test] = preds_y
-
-        if with_probas:
-            train_prob = model.predict_proba(train_X)[:,1]
-            proba_y = model.predict_proba(test_X)[:,1]
-            predictions['proba'][test] = proba_y
-            if tuning:
-                tc.fit(np.array([train_prob]).T, train_y)
-                adjusted = tc.predict(np.array([proba_y]).T)
-                predictions['adj_pred'][test] = adjusted
 
         predictions['foldno'][test] = foldno
         #print "   (f1 #%d: %.3f)" % (foldno, metrics.f1_score(test_y, preds_y))
@@ -250,7 +264,7 @@ def cv_trials(X, y, folds, model, tuning=False):
                       'p': metrics.precision_score(test_y, preds_y),
                       'r': metrics.recall_score(test_y, preds_y),
                       'a': metrics.accuracy_score(test_y, preds_y)}
-        print fold_eval
+        print "[%02d] Best hyper [train %.3f -> val %.3f -> test %.3f] %s" % (foldno, train_f1, best_val_f1, fold_eval['f1'], best_params)
 
 
         cv_scores.append(fold_eval)
@@ -259,10 +273,7 @@ def cv_trials(X, y, folds, model, tuning=False):
     # now we want to compute global evaluations, and consolidate metrics
     cv_scores = consolidate(cv_scores)
 
-    if tuning:
-        preds_y = predictions['adj_pred']
-    else:
-        preds_y = predictions['pred']
+    preds_y = predictions['pred']
     pooled_eval = {'f1': metrics.f1_score(y, preds_y),
                     'p': metrics.precision_score(y, preds_y),
                     'r': metrics.recall_score(y, preds_y),
@@ -304,9 +315,7 @@ def main():
     parser.add_argument('--model', '-m', help='Model setup', choices=models.SETUPS.keys())
     parser.add_argument('--experiment', '-e', default='standard', choices=('standard', 'random', 'match_error', 'featext', 'strat', 'levy'))
     parser.add_argument('--stratifier')
-    #parser.add_argument('--tuning', action='store_true')
     parser.add_argument('--output', '-o')
-    parser.add_argument('--tuning', '-t', action='store_true')
     args = parser.parse_args()
 
     if args.data == "kotlerman2010":
@@ -341,20 +350,19 @@ def main():
     #    data = pd.concat([data, fake_data[fake_mask]], ignore_index=True)
 
     logger.debug("         Model: %s" % args.model)
-    model, features = models.load_setup(args.model)
+    model, features, hyper = models.load_setup(args.model)
 
     logger.debug("      Features: %s" % features)
     X, y = models.generate_feature_matrix(data, space, features)
 
     if args.experiment == 'standard':
-        standard_experiment(data, X, y, model, args, tuning=args.tuning)
+        standard_experiment(data, X, y, model, hyper, args)
     elif args.experiment == 'random':
-        random_experiment(data, X, y, model)
+        random_experiment(data, X, y, model, hyper, args)
     elif args.experiment == 'levy':
         levy_experiment(args.data, model, features, space)
     elif args.experiment == 'featext':
         if args.model == 'super':
-            print "foo"
             feature_extraction_super(X, y, model, space, data)
         else:
             feature_extraction(X, y, model, space, data)

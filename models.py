@@ -3,7 +3,7 @@
 import numpy as np
 from sklearn import svm, linear_model, dummy
 
-from custom_classifiers import ThresholdClassifier, levy_kernel
+from custom_classifiers import ThresholdClassifier, ksim_kernel
 
 SETUPS = {
     # baseline most common
@@ -15,25 +15,17 @@ SETUPS = {
     'lhs': ('lr2', 'lhs'),
     'rhs': ('lr2', 'rhs'),
     'concat': ('linear', 'concat'),
-    'balconcat': ('ballinear', 'concat'),
     'concat2': ('lr2', 'concat'),
-    'balconcat2': ('ballr2', 'concat'),
 
     # asym models
     'diff': ('linear', 'diff'),
     'diffsq': ('linear', 'diffsq'),
-    'baldiff': ('ballinear', 'diff'),
-    'baldiffsq': ('ballinear', 'diffsq'),
 
     # asym lr
-    'baldiff1': ('ballr1', 'diff'),
-    'baldiff2': ('ballr2', 'diff'),
     'diff1': ('lr1', 'diff'),
     'diff2': ('lr2', 'diff'),
 
     # asym lr
-    'baldiffsq1': ('ballr1', 'diffsq'),
-    'baldiffsq2': ('ballr2', 'diffsq'),
     'diffsq1': ('lr1', 'diffsq'),
     'diffsq2': ('lr2', 'diffsq'),
 
@@ -45,28 +37,21 @@ SETUPS = {
     # other models
     'bdsm': ('bdsm', 'concat'),
     'stephen': ('stephen', 'concat'),
-    'levy': ('levy', 'concat'),
+    'ksim': ('ksim', 'concat'),
     'sigmoid': ('sigmoid', 'concat'),
 
-    'balsqconcat': ('ballr2', 'sqconcat'),
-    'balcoslhsrhs': ('ballr2', 'coslhsrhs'),
-    'sqconcat': ('linear', 'sqconcat'),
-    'coslhsrhs': ('linear', 'coslhsrhs'),
+    'concat+asym': ('lr2', 'concat+asym'),
+    'concat+diff': ('lr2', 'concat+diff'),
+    'concat+sq': ('lr2', 'concat+sq'),
+    'concat+cos': ('lr2', 'concat+cos'),
+    'concat+cosrbf': ('rbf', 'concat+cos'),
 
     'super': ('super', 'concat'),
-    'super1': ('super1', 'concat'),
-    'super2': ('super2', 'concat'),
-    'super3': ('super3', 'concat'),
-    'super4': ('super4', 'concat'),
-    'super5': ('super5', 'concat'),
-    'super6': ('super8', 'concat'),
-    'super7': ('super7', 'concat'),
-    'super8': ('super8', 'concat'),
-    'super9': ('super9', 'concat'),
-    'super10': ('super10', 'concat'),
+    'super-cos': ('super-cos', 'concat'),
+    'super-incl': ('super-incl', 'concat'),
+    'super-proj': ('super-proj', 'concat'),
 
     'sq': ('linear', 'sq'),
-    'balsq': ('ballinear', 'sq'),
 
     # others I dont want now
     #('lhs', 'lr1', 'lhs'),
@@ -81,9 +66,7 @@ SETUPS = {
     #('diff', 'lr2', 'diff'),
     #('diffsq', 'lr2', 'diffsq'),
 
-    #('diffpoly', 'poly2', 'diff'),
-
-    'balpoly3': ('poly3', 'concat'),
+    'poly': ('poly', 'concat'),
 }
 
 def _lsplit(needle, haystack):
@@ -214,14 +197,25 @@ def generate_feature_matrix(data, space, features):
         X = generate_diff_matrix(data, space)
     elif features == 'diffsq':
         X = generate_diffsq_matrix(data, space)
-    elif features == 'coslhsrhs':
+    elif features == 'concat+cos':
         X1 = generate_lhs_matrix(data, space)
         X2 = generate_rhs_matrix(data, space)
         X3 = generate_cosine_matrix(data, space)
         X = np.concatenate([X1, X2, X3, bin(X3)], axis=1)
     elif features == 'sq':
         X = np.square(generate_diff_matrix(data, space))
-    elif features == 'sqconcat':
+    elif features == 'concat+diff':
+        X1 = generate_diff_matrix(data, space)
+        X2 = generate_lhs_matrix(data, space)
+        X3 = generate_rhs_matrix(data, space)
+        X = np.concatenate([X1, X2, X3], axis=1)
+    elif features == 'concat+asym':
+        X1 = generate_diff_matrix(data, space)
+        X2 = generate_lhs_matrix(data, space)
+        X3 = generate_rhs_matrix(data, space)
+        X4 = np.square(X1)
+        X = np.concatenate([X1, X2, X3, X4], axis=1)
+    elif features == 'concat+sq':
         X1 = np.square(generate_diff_matrix(data, space))
         X2 = generate_lhs_matrix(data, space)
         X3 = generate_rhs_matrix(data, space)
@@ -235,50 +229,46 @@ def generate_feature_matrix(data, space, features):
     y = data.entails.as_matrix()
     return X, y
 
+def dict_union(a, b):
+    c = {}
+    for k, v in a.iteritems():
+        c[k] = v
+    for k, v in b.iteritems():
+        c[k] = v
+    return c
+
 def classifier_factory(name):
+    #Cs = {'C': [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e+0, 1e+1, 1e+2, 1e+3, 1e+4, 1e+5], 'class_weight': ['balanced']}
+    Cs = {'C': [1e+0, 1e-1, 1e+1, 1e-2, 1e+2, 1e-3, 1e+3, 1e-4, 1e+4], 'class_weight': ['balanced']}
     if name == 'linear':
-        return svm.LinearSVC(dual=False)
+        return svm.LinearSVC(dual=False), Cs
     elif name == 'ballinear':
-        return svm.LinearSVC(class_weight='balanced', dual=False)
-    elif name == 'poly2':
-        return svm.SVC(kernel='poly', degree=2, class_weight='balanced', shrinking=False, cache_size=8192, max_iter=2000)
-    elif name == 'poly3':
-        return svm.SVC(kernel='poly', degree=3, class_weight='balanced', shrinking=False, cache_size=8192, max_iter=2000)
+        return svm.LinearSVC(class_weight='balanced', dual=False), Cs
+    elif name == 'poly':
+        return svm.SVC(kernel='poly', degree=3, shrinking=False, cache_size=8192, max_iter=2000), Cs
     elif name == 'threshold':
-        return ThresholdClassifier()
-    elif name == 'sigmoid':
-        return svm.SVC(kernel='sigmoid', class_weight='balanced', cache_size=8192, shrinking=False, max_iter=2000)
+        return ThresholdClassifier(), {}
     elif name == 'rbf':
-        return svm.SVC(kernel='rbf', class_weight='balanced', cache_size=8192, shrinking=False, max_iter=2000, C=1e+2)
+        return svm.SVC(kernel='rbf', class_weight='balanced', cache_size=8192, shrinking=False, max_iter=2000, C=1e+2), Cs
     elif name == 'lr2':
-        return linear_model.LogisticRegression(penalty='l2', solver='liblinear')
+        return linear_model.LogisticRegression(penalty='l2', solver='liblinear'), Cs
     elif name == 'lr1':
-        return linear_model.LogisticRegression(penalty='l1', solver='liblinear')
-    elif name == 'ballr2':
-        return linear_model.LogisticRegression(penalty='l2', solver='liblinear', class_weight='balanced')
-    elif name == 'ballr1':
-        return linear_model.LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced')
+        return linear_model.LogisticRegression(penalty='l1', solver='liblinear'), Cs
     elif name == 'baseline':
-        return dummy.DummyClassifier(strategy='most_frequent')
-    elif name == 'stephen':
-        from nn import Stephen
-        return Stephen()
-    elif name == 'bdsm':
-        from nn import BDSM
-        return BDSM(5)
-    elif name == 'tree':
-        import sklearn.tree
-        return sklearn.tree.DecisionTreeClassifier()
+        return dummy.DummyClassifier(strategy='most_frequent'), {}
     elif name.startswith('super'):
         from custom_classifiers import SuperTreeClassifier
-        if name == 'super': n = 4
-        else: n = int(name[5:])
-        return SuperTreeClassifier(n_features=n)
-    elif name == 'levy':
-        return svm.SVC(kernel=levy_kernel, cache_size=8192, class_weight='balanced', shrinking=False, max_iter=5000)
+        remove = name[6:]
+        extra = {}
+        if remove:
+            extra[remove] = False
+        return SuperTreeClassifier(**extra), dict_union(Cs, {'n_features': [1, 2, 3, 4, 5, 6]})
+    elif name == 'ksim':
+        return svm.SVC(kernel=ksim_kernel, cache_size=8192, shrinking=False, max_iter=2000), Cs
     else:
         raise ValueError("Don't know about %s models." % name)
 
 def load_setup(setupname):
     kl, fe = SETUPS[setupname]
-    return classifier_factory(kl), fe
+    cl, hyper = classifier_factory(kl)
+    return cl, fe, hyper
