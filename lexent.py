@@ -117,67 +117,6 @@ def feature_extraction(X, y, model, space, data):
             print "    %6.3f %s  %s" % (score, indata, ctx)
     return model.coef_
 
-def levy_experiment(data_filename, model, features, space):
-    train_data = load_data("data/%s/data_lex_train.tsv" % data_filename, space)
-    val_data = load_data("data/%s/data_lex_val.tsv" % data_filename, space)
-    test_data = load_data("data/%s/data_lex_test.tsv" % data_filename, space)
-
-    train_X, train_y = models.generate_feature_matrix(train_data, space, features)
-    val_X, val_y = models.generate_feature_matrix(val_data, space, features)
-    test_X, test_y = models.generate_feature_matrix(test_data, space, features)
-
-    model.fit(train_X, train_y)
-    val_preds_y = model.predict(val_X)
-    test_preds_y = model.predict(test_X)
-    logger.info("[ val] F1: %.3f" % metrics.f1_score(val_preds_y, val_y))
-    logger.info("[test] F1: %.3f" % metrics.f1_score(test_preds_y, test_y))
-
-def random_experiment(data, X, y, model, hyper, args):
-    # data with predictions
-    dwp = data.copy()
-
-    #for seed in xrange(1, 21):
-    seed = 1
-    logger.debug("       On seed: %d / %d" % (seed, 20))
-    logger.debug("  Genenerating: %d folds" % N_FOLDS)
-    rng = np.random.RandomState(seed)
-    fold_key = 'fold_%02d' % seed
-    pred_key = 'prediction_%02d' % seed
-    pred_prob_key = 'probability_%02d' % seed
-
-    # need our folds for cross validation
-    folds = fold.generate_folds_random(rng, data, n_folds=N_FOLDS)
-    train_sizes = np.array([len(f[0]) for f in folds], dtype=np.float)
-    val_sizes = np.array([len(f[1]) for f in folds], dtype=np.float)
-    test_sizes = np.array([len(f[2]) for f in folds], dtype=np.float)
-
-    logger.debug("   Train sizes: %.1f" % np.mean(train_sizes))
-    logger.debug("     Val sizes: %.1f" % np.mean(val_sizes))
-    logger.debug("    Test sizes: %.1f" % np.mean(test_sizes))
-    logger.debug(" Test-Tr ratio: %.1f%%" % np.mean(test_sizes*100./(train_sizes + test_sizes)))
-    logger.debug("  Percent data: %.1f%%" % np.mean((train_sizes + test_sizes)*100./len(y)))
-
-    # perform cross validation
-    pooled_eval, predictions, cv_scores = cv_trials(X, y, folds, model, hyper)
-    dwp['prediction'] = predictions['pred']
-
-    for i, v in enumerate(cv_scores['f1']):
-        logger.info("  Fold %02d F1: %.3f" % (i + 1, v))
-
-    for k in cv_scores.keys():
-        mu = cv_scores[k].mean()
-        sigma = cv_scores[k].std()
-        logger.info(" %3s across CV: %.3f   %.3f" % (k.upper(), mu, sigma))
-    logger.debug("")
-
-    if args.output:
-        dwp.to_csv("%s/exp:%s,data:%s,space:%s,model:%s.csv.bz2" % (
-            args.output, args.experiment, args.data,
-            os.path.basename(args.space),
-            args.model
-            ), index=False, compression='bz2')
-
-
 def standard_experiment(data, X, y, model, hyper, args):
     # data with predictions
     dwp = data.copy()
@@ -318,10 +257,6 @@ def main():
     parser.add_argument('--output', '-o')
     args = parser.parse_args()
 
-    if args.data == "kotlerman2010":
-        global N_FOLDS
-        N_FOLDS = 50
-
     logger.debug('Lexent Arguments: ')
     logger.debug(args)
 
@@ -334,21 +269,6 @@ def main():
     logger.debug("Reading data")
     data = load_data("data/%s/data.tsv" % args.data, space)
 
-    #if args.experiment == 'artificial':
-    #    np.random.seed(31337)
-    #    exists = {}
-    #    for i, row in data.iterrows():
-    #        exists[(row['word1'], row['word2'])] = row['entails']
-    #    fake_data = data.copy()
-    #    word2s = np.array(fake_data['word2'])
-    #    np.random.shuffle(word2s)
-    #    fake_data['word2'] = word2s
-    #    fake_data['entails'] = False
-    #    fake_mask = []
-    #    for i, row in fake_data.iterrows():
-    #        fake_mask.append((row['word1'], row['word2']) not in exists)
-    #    data = pd.concat([data, fake_data[fake_mask]], ignore_index=True)
-
     logger.debug("         Model: %s" % args.model)
     model, features, hyper = models.load_setup(args.model)
 
@@ -357,10 +277,6 @@ def main():
 
     if args.experiment == 'standard':
         standard_experiment(data, X, y, model, hyper, args)
-    elif args.experiment == 'random':
-        random_experiment(data, X, y, model, hyper, args)
-    elif args.experiment == 'levy':
-        levy_experiment(args.data, model, features, space)
     elif args.experiment == 'featext':
         if args.model == 'super':
             feature_extraction_super(X, y, model, space, data)
