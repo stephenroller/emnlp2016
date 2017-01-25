@@ -52,16 +52,6 @@ class SuperTreeClassifier(BaseEstimator, ClassifierMixin):
         extraction = []
         for i in xrange(self.n_features):
             D = X.shape[1] / 2
-            #self.linear.fit(X[:,:D], y)
-            #f1l = f1_score(y, self.linear.predict(X[:,:D]))
-            #hyperplane = self.linear.coef_[0]
-
-            #self.linear.fit(X[:,D:], y)
-            #f1r = f1_score(y, self.linear.predict(X[:,D:]))
-
-            #if f1l < f1r: hyperplane = self.linear.coef_[0]
-            #print max(f1l, f1r)
-
             # copy it for feature extraction purposes
             self.linear.fit(X, y)
             self.models.append(clone(self.linear))
@@ -74,13 +64,12 @@ class SuperTreeClassifier(BaseEstimator, ClassifierMixin):
             else:
                 hyperplane = rhs
             feats, X = self._subproj(hyperplane, X)
+            self.planes.append(hyperplane)
             hyperplane = hyperplane / np.sqrt(hyperplane.dot(hyperplane))
             extraction.append(feats)
-            self.planes.append(hyperplane)
 
-        Xe = (np.concatenate(extraction).T)
-        #Xet = Xe
-        #Xe = np.concatenate([Xe, X], axis=1)
+        self.coef_ = np.array(self.planes)
+        Xe = np.concatenate(extraction).T
         self.final.fit(Xe, y)
         return self
 
@@ -90,9 +79,6 @@ class SuperTreeClassifier(BaseEstimator, ClassifierMixin):
             feats, X = self._subproj(p, X)
             extraction.append(feats)
         Xe = (np.concatenate(extraction).T)
-        #Xet = Xe
-        #Xe = np.concatenate([Xe, X], axis=1)
-        #return self.nb.predict(Xe)
         return self.final.predict(Xe)
 
     def set_params(self, **kwargs):
@@ -144,6 +130,4 @@ def ksim_kernel(U, V):
 
     retval = np.multiply(a2, b2)
     return retval
-
-
 

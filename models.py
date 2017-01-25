@@ -66,7 +66,7 @@ SETUPS = {
     #('diff', 'lr2', 'diff'),
     #('diffsq', 'lr2', 'diffsq'),
 
-    'poly': ('poly', 'concat'),
+    'nn': ('nn', 'concat'),
 }
 
 def _lsplit(needle, haystack):
@@ -226,7 +226,10 @@ def generate_feature_matrix(data, space, features):
         X = np.concatenate([X1, X2], axis=1)
     else:
         raise ValueError("Can't generate %s features" % features)
-    y = data.label.as_matrix()
+    if data.label.dtype == bool:
+        y = data.label.as_matrix().astype('int32')
+    else:
+        y = data.label.astype('category').cat.codes.as_matrix().astype('int32')
     return X, y
 
 def dict_union(a, b):
@@ -256,6 +259,9 @@ def classifier_factory(name):
         return linear_model.LogisticRegression(penalty='l1', solver='liblinear'), Cs
     elif name == 'baseline':
         return dummy.DummyClassifier(strategy='most_frequent'), {}
+    elif name == 'nn':
+        import nn
+        return nn.MirrorClassifier(), {}
     elif name.startswith('super'):
         from custom_classifiers import SuperTreeClassifier
         remove = name[6:]

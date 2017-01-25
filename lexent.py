@@ -59,61 +59,55 @@ def consolidate(list_of_dicts):
         consolidated[k] = np.array([d[k] for d in list_of_dicts])
     return consolidated
 
-def feature_extraction_super(X, y, model, space, data):
-    model.fit(X, y)
-    for i, m in enumerate(model.models):
-        print "Iteration %d" % i
-        feature_extraction(X, y, m, space, data)
-
 def feature_extraction(X, y, model, space, data):
-    np.set_printoptions(suppress=True)
+    np.set_printoptions(precision=3, suppress=True)
     n_output = 10
-    #model.fit(X, y)
-    D = space.matrix.shape[1]
-    segments = int(X.shape[1] / D)
-    full_magn = np.sum(np.square(model.coef_))
+    model.fit(X, y)
     data_vocab = set(list(data.word1) + list(data.word2))
+    D = space.matrix.shape[1]
+    segments = model.coef_.shape[1] / D
+    print "=== ORTHOG TEST ==="
     for s in xrange(segments):
         l = D*s
         r = D*(s+1)
-        feats = model.coef_[0,l:r]
-        p = np.sum(np.square(feats)) / full_magn
-        print "Segment #%d [%d-%d] [%2.1f%%]" % (s + 1, l, r, 100*p)
-        word_ranks = space.matrix.dot(feats)
-        sorted = word_ranks.argsort()
-        print "  Strongest words:"
-        for i in xrange(n_output):
-            idx = sorted[-(i+1)]
-            score = word_ranks[idx]
-            word = space.vocab[idx]
-            indata = (word in data_vocab) and '*' or ' '
-            print "    %6.3f %s %s" % (score, indata, word)
-        print "  Weakest words:"
-        for i in xrange(n_output-1, -1, -1):
-            idx = sorted[i]
-            score = word_ranks[idx]
-            word = space.vocab[idx]
-            indata = (word in data_vocab) and '*' or ' '
-            print "    %6.3f %s %s" % (score, indata, word)
-        ctx_ranks = space.cmatrix.dot(feats)
-        sorted = ctx_ranks.argsort()
-        print "  Strongest contexts:"
-        for i in xrange(n_output):
-            idx = sorted[-(i+1)]
-            score = ctx_ranks[idx]
-            ctx = space.cvocab[idx]
-            word = ctx[ctx.rindex('+')+1:]
-            indata = (word in data_vocab) and '*' or ' '
-            print "    %6.3f %s  %s" % (score, indata, ctx)
-        print "  Weakest contexts:"
-        for i in xrange(n_output-1, -1, -1):
-            idx = sorted[i]
-            score = ctx_ranks[idx]
-            ctx = space.cvocab[idx]
-            word = ctx[ctx.rindex('+')+1:]
-            indata = (word in data_vocab) and '*' or ' '
-            print "    %6.3f %s  %s" % (score, indata, ctx)
-    return model.coef_
+        subset = normalize(model.coef_[:,l:r])
+        print subset.dot(subset.T)
+    for coef_i in xrange(len(model.coef_)):
+        print "=== COEF #%d ===" % coef_i
+        full_magn = np.sum(np.square(model.coef_[coef_i]))
+        for s in xrange(segments):
+            l = D*s
+            r = D*(s+1)
+            feats = model.coef_[coef_i,l:r]
+            p = np.sum(np.square(feats)) / full_magn
+            print "Segment #%d [%d-%d] [%2.1f%%]" % (s + 1, l, r, 100*p)
+            word_ranks = space.matrix.dot(feats)
+            sorted = word_ranks.argsort()
+            for i in xrange(n_output):
+                fidx = sorted[-(i+1)]
+                ridx = sorted[i]
+                fscore = word_ranks[fidx]
+                rscore = word_ranks[ridx]
+                fword = space.vocab[fidx][:30]
+                rword = space.vocab[ridx][:30]
+                findata = (fword in data_vocab) and '*' or ' '
+                rindata = (rword in data_vocab) and '*' or ' '
+                print "  %6.3f %s %-30s  %6.3f %s %-30s" % (fscore, findata, fword, rscore, rindata, rword)
+            print
+            ctx_ranks = space.cmatrix.dot(feats)
+            sorted = ctx_ranks.argsort()
+            for i in xrange(n_output):
+                fidx = sorted[-(i+1)]
+                ridx = sorted[i]
+                fscore = ctx_ranks[fidx]
+                rscore = ctx_ranks[ridx]
+                fctx = space.cvocab[fidx]
+                rctx = space.cvocab[ridx]
+                fword = fctx[fctx.rindex('+')+1:]
+                rword = rctx[rctx.rindex('+')+1:]
+                findata = (fword in data_vocab) and '*' or ' '
+                rindata = (rword in data_vocab) and '*' or ' '
+                print "  %6.3f %s %-30s  %6.3f %s %-30s" % (fscore, findata, fctx, rscore, rindata, rctx)
 
 def standard_experiment(data, X, y, model, hyper, args):
     # data with predictions
@@ -181,23 +175,23 @@ def cv_trials(X, y, folds, model, hyper):
         for these_params in pg:
             model.set_params(**these_params)
             model.fit(train_X, train_y)
-            this_val_f1 = metrics.f1_score(val_y, model.predict(val_X))
+            this_val_f1 = metrics.f1_score(val_y, model.predict(val_X), average="weighted")
             if not best_params or this_val_f1 > best_val_f1:
                 best_params = these_params
                 best_val_f1 = this_val_f1
         if len(pg) > 1:
             model.set_params(**best_params)
             model.fit(train_X, train_y)
-        train_f1 = metrics.f1_score(train_y, model.predict(train_X))
+        train_f1 = metrics.f1_score(train_y, model.predict(train_X), average="weighted")
 
         preds_y = model.predict(test_X)
         predictions['pred'][test] = preds_y
 
         predictions['foldno'][test] = foldno
 
-        fold_eval = {'f1': metrics.f1_score(test_y, preds_y),
-                      'p': metrics.precision_score(test_y, preds_y),
-                      'r': metrics.recall_score(test_y, preds_y),
+        fold_eval = {'f1': metrics.f1_score(test_y, preds_y, average="weighted"),
+                      'p': metrics.precision_score(test_y, preds_y, average="weighted"),
+                      'r': metrics.recall_score(test_y, preds_y, average="weighted"),
                       'a': metrics.accuracy_score(test_y, preds_y)}
         print "[%02d] Best hyper [train %.3f -> val %.3f -> test %.3f] %s" % (foldno, train_f1, best_val_f1, fold_eval['f1'], best_params)
 
@@ -209,9 +203,9 @@ def cv_trials(X, y, folds, model, hyper):
     cv_scores = consolidate(cv_scores)
 
     preds_y = predictions['pred']
-    pooled_eval = {'f1': metrics.f1_score(y, preds_y),
-                    'p': metrics.precision_score(y, preds_y),
-                    'r': metrics.recall_score(y, preds_y),
+    pooled_eval = {'f1': metrics.f1_score(y, preds_y, average="weighted"),
+                    'p': metrics.precision_score(y, preds_y, average="weighted"),
+                    'r': metrics.recall_score(y, preds_y, average="weighted"),
                     'a': metrics.accuracy_score(y, preds_y)}
 
     return pooled_eval, predictions, cv_scores
@@ -274,10 +268,7 @@ def main():
     if args.experiment == 'standard':
         standard_experiment(data, X, y, model, hyper, args)
     elif args.experiment == 'featext':
-        if args.model == 'super':
-            feature_extraction_super(X, y, model, space, data)
-        else:
-            feature_extraction(X, y, model, space, data)
+        feature_extraction(X, y, model, space, data)
 
 
 
