@@ -109,6 +109,17 @@ def feature_extraction(X, y, model, space, data):
                 rindata = (rword in data_vocab) and '*' or ' '
                 print "  %6.3f %s %-30s  %6.3f %s %-30s" % (fscore, findata, fctx, rscore, rindata, rctx)
 
+def render_confusion_matrix(y_true, y_pred, labels):
+    cm = metrics.confusion_matrix(y_true, y_pred) / float(len(y_true))
+    output = []
+    shortlabels = "abcdefghij"
+    output += ["    " + "    ".join(a for a, b in zip(shortlabels, labels)) + " <- predicted as"]
+    f = lambda v: ("%.2f" % v).lstrip("0").replace(".00", ".  ")
+    for i, (s, r) in enumerate(zip(shortlabels, labels)):
+        output += ["  " + "  ".join(f(v) for v in cm[i]) + "  | %s = %s" % (s, r)]
+    return "\n".join(output)
+
+
 def standard_experiment(data, X, y, model, hyper, args):
     # data with predictions
     dwp = data.copy()
@@ -142,6 +153,8 @@ def standard_experiment(data, X, y, model, hyper, args):
 
     for i, v in enumerate(cv_scores['f1']):
         logger.info("  Fold %02d F1: %.3f" % (i + 1, v))
+
+    logger.info("\nConfusion matrix:\n" + render_confusion_matrix(y, predictions['pred'], labels=data.label.cat.categories))
 
     for k in cv_scores.keys():
         mu = cv_scores[k].mean()
@@ -230,6 +243,11 @@ def load_data(filename, space):
     logger.debug("       RHS OOV: %5d ( %4.1f%% )" % (M2T, M2T*100./T))
     logger.debug("         Final: %5d ( %4.1f%% )" % (F, F*100./T))
     logger.debug("")
+
+    if data.label.dtype != bool:
+        cats = list(set(data.label))
+        import ipdb; ipdb.set_trace()
+        data['label'] =  data.label.astype('category', categories=cats)
 
     return data
 

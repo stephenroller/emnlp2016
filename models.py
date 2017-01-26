@@ -92,33 +92,21 @@ def generate_relation_matrix(data, space):
     relations = [k for k, v in relations.iteritems() if v >= 10]
     setattr(space, 'relations', relations)
 
-    ## first we gotta get the nearest neighbors
-    #allvocab = set(list(data['word1']) + list(data['word2']))
-    #allvecs = space.matrix[[space.lookup[v] for v in allvocab]]
-    #nearest_neighbors = topk(allvecs.dot(space.matrix.T))
-    #nn_lookup = {v : i for i, v in enumerate(allvocab)}
-    #import ipdb; ipdb.set_trace()
-    #print nearest_neighbors
-    
     k = 0
     for i, row in data.iterrows():
         k = k + 1
-        #print "%d/%d" % (k , len(data))
         word1 = row['word1']
         word2 = row['word2']
         lhs = space.matrix[space.lookup[word1]]
         rhs = space.matrix[space.lookup[word2]]
-        #indices = [find_indices(space, r, nearest_neighbors[nn_lookup[word2]]) for r in relations]
         indices = [find_indices(space, r, [space.lookup[word2]]) for r in relations]
         ests_l = space.cmatrix[indices].dot(lhs)
         tofind = [(r + '+' + word1) for r in relations]
-        #indices = [find_indices(space, r, nearest_neighbors[nn_lookup[word2]]) for r in relations]
         indices = [find_indices(space, r, [space.lookup[word1]]) for r in relations]
         ests_r = space.cmatrix[indices].dot(rhs)
         retval_l.append(ests_l)
         retval_r.append(ests_r)
     retval = np.concatenate([np.array(retval_l), np.array(retval_r)], axis=1)
-    #retval = retval.clip(0, 20)
     retval = np.exp(retval)
     from sklearn.preprocessing import normalize
     return normalize(retval, norm='l2')
@@ -229,7 +217,7 @@ def generate_feature_matrix(data, space, features):
     if data.label.dtype == bool:
         y = data.label.as_matrix().astype('int32')
     else:
-        y = data.label.astype('category').cat.codes.as_matrix().astype('int32')
+        y = data.label.cat.codes.as_matrix().astype('int32')
     return X, y
 
 def dict_union(a, b):
@@ -241,12 +229,9 @@ def dict_union(a, b):
     return c
 
 def classifier_factory(name):
-    #Cs = {'C': [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e+0, 1e+1, 1e+2, 1e+3, 1e+4, 1e+5], 'class_weight': ['balanced']}
-    Cs = {'C': [1e+0, 1e-1, 1e+1, 1e-2, 1e+2, 1e-3, 1e+3, 1e-4, 1e+4], 'class_weight': ['balanced']}
+    Cs = {'C': [1e+0, 1e-1, 1e+1, 1e-2, 1e+2, 1e-3, 1e+3], 'class_weight': ['balanced']}
     if name == 'linear':
         return svm.LinearSVC(dual=False), Cs
-    elif name == 'ballinear':
-        return svm.LinearSVC(class_weight='balanced', dual=False), Cs
     elif name == 'poly':
         return svm.SVC(kernel='poly', degree=3, shrinking=False, cache_size=8192, max_iter=2000), Cs
     elif name == 'threshold':
